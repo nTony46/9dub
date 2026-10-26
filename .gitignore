@@ -1,0 +1,32 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+.DS_Store
+*.local
+
+# Private, user-provided source data — never commit (licensing / personal use only)
+/Fantasy Draft Data/
+# Derived real-data artifacts produced by `npm run data:ingest` (private, local only)
+/.local-data/
+# Local browser-state backups
+/backups/
+
+# Private notes kept on this machine, not part of the project
+/9dub_build_prompt.md
+/docs/REAL_DATA_INTEGRATION_AUDIT.md
+# Screenshots, recordings and exports dropped into the project folder
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.heic
+/*.webp
+/*.mov
+/*.mp4
+/*.pdf
+/screenshots/
+# Environment files
+.env
+.env.*
