@@ -1,0 +1,192 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * 9dub tokens — "war-room scoreboard".
+ * arena/floor/stand/booth: surface elevation (whisper-quiet steps, one hue).
+ * chalk-*: text tiers. seam: borders. clock: the single accent (on the clock,
+ * your pick, selection). plus/minus/mid: diverging category strength.
+ */
+:root {
+  --arena: #f4f3ef;
+  --floor: #fbfaf8;
+  --stand: #f0eee9;
+  --booth: #ffffff;
+  --well: #ecebe6;
+  --chalk: #16181c;
+  --chalk-2: #3f434a;
+  --chalk-3: #5f646d;
+  --chalk-4: #858a93;
+  --seam: rgba(20, 22, 28, 0.1);
+  --seam-strong: rgba(20, 22, 28, 0.18);
+  --clock: #b7790f;
+  --clock-ink: #fffaf0;
+  --clock-soft: rgba(183, 121, 15, 0.12);
+  --clock-line: rgba(183, 121, 15, 0.45);
+  --plus: #2f6fc0;
+  --minus: #c8423f;
+  --mid: #e7e5e0;
+  --good: #1f8a4c;
+  --warn: #a86a00;
+  --bad: #c33c3a;
+  --shadow-pop: 0 0 0 1px rgba(20, 22, 28, 0.08), 0 8px 24px -8px rgba(20, 22, 28, 0.18);
+}
+
+.dark {
+  --arena: #0b0d10;
+  --floor: #101317;
+  --stand: #151a1f;
+  --booth: #1a2027;
+  --well: #090b0d;
+  --chalk: #eceef1;
+  --chalk-2: #c3c8cf;
+  --chalk-3: #949ca7;
+  --chalk-4: #6c7580;
+  --seam: rgba(255, 255, 255, 0.07);
+  --seam-strong: rgba(255, 255, 255, 0.13);
+  --clock: #f0b43c;
+  --clock-ink: #1b1303;
+  --clock-soft: rgba(240, 180, 60, 0.12);
+  --clock-line: rgba(240, 180, 60, 0.5);
+  --plus: #4a90e2;
+  --minus: #e0605d;
+  --mid: #2c3138;
+  --good: #3fb27a;
+  --warn: #e0a43a;
+  --bad: #e5605c;
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 12px 32px -12px rgba(0, 0, 0, 0.7);
+}
+
+@theme inline {
+  --color-arena: var(--arena);
+  --color-floor: var(--floor);
+  --color-stand: var(--stand);
+  --color-booth: var(--booth);
+  --color-well: var(--well);
+  --color-chalk: var(--chalk);
+  --color-chalk-2: var(--chalk-2);
+  --color-chalk-3: var(--chalk-3);
+  --color-chalk-4: var(--chalk-4);
+  --color-seam: var(--seam);
+  --color-seam-strong: var(--seam-strong);
+  --color-clock: var(--clock);
+  --color-clock-ink: var(--clock-ink);
+  --color-clock-soft: var(--clock-soft);
+  --color-clock-line: var(--clock-line);
+  --color-plus: var(--plus);
+  --color-minus: var(--minus);
+  --color-mid: var(--mid);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Barlow Condensed', 'Inter Variable', ui-sans-serif, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --text-2xs: 10.5px;
+  --text-2xs--line-height: 14px;
+  --shadow-pop: var(--shadow-pop);
+  --ease-out-snap: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--arena);
+    color: var(--chalk);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  ::selection {
+    background: var(--clock-soft);
+  }
+  :focus-visible {
+    outline: 2px solid var(--clock-line);
+    outline-offset: 1px;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--seam-strong) transparent;
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  .label-caps {
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--chalk-3);
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes slide-in-right {
+  from {
+    opacity: 0.4;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes flash-row {
+  from {
+    background: var(--clock-soft);
+  }
+  to {
+    background: transparent;
+  }
+}
+.anim-pop {
+  animation: pop-in 140ms var(--ease-out-snap);
+}
+.anim-sheet {
+  animation: slide-in-right 200ms var(--ease-out-snap);
+}
+.anim-flash {
+  animation: flash-row 1200ms ease-out;
+}
