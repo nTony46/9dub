@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-10-16T22:34:28.467Z",
+  "datasets": [
+    {
+      "id": "demo-2026-27-s9",
+      "file": "demo-2026-27.json",
+      "name": "Demo pool — fictional players",
+      "season": "2026-27",
+      "kind": "demo",
+      "players": 280,
+      "default": true
+    }
+  ]
+}
