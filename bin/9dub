@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# 9dub: start the app and open it in the browser, or just open it if it's already running.
+# Install once with: ln -s "$PWD/bin/9dub" ~/.local/bin/9dub   (any folder on your PATH works)
+set -euo pipefail
+
+# Follow the symlink back to the repo, so `9dub` works from any folder.
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+  dir="$(cd "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" == /* ]] || src="$dir/$src"
+done
+cd "$(dirname "$src")/.."
+
+# Browser storage is per origin: always the same address (vite.config.ts pins port 5199 with strictPort).
+url="http://localhost:5199/"
+# Your real data, the on-disk session copy and the ESPN sync are on unless these say "off": never inherit an "off".
+unset NINEDUB_LOCAL_DATA NINEDUB_SESSION_SAVE NINEDUB_ESPN
+
+open_browser() { [ "${BROWSER:-}" = none ] || open "$url"; }
+
+if curl -fsS --max-time 2 "$url" 2>/dev/null | grep -q '<title>9dub'; then
+  echo "9dub is already running. Opening $url"
+  open_browser
+  exit 0
+fi
+
+[ -d node_modules/vite ] || npm install
+
+echo "Starting 9dub at $url (Ctrl+C or closing this window stops it; your data stays saved)"
+exec node node_modules/vite/bin/vite.js --open
