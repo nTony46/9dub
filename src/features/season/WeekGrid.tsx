@@ -18,8 +18,9 @@ const dow = (iso: string) => dayLabel(iso).dow
  * The matchup week at a glance, as a lineup calendar: one row per roster slot
  * (PG … UTIL, BE, IR) and, for each day, who fills it. Players stay in their
  * usual slot; when a starter has no game, a bench player with a game who fits
- * takes the seat. Below, in the same columns, NBA teams whose games land on
- * the empty nights.
+ * takes the seat. On top, both sides' games that count, day by day and for the
+ * week; below, in the same columns, NBA teams whose games land on the empty
+ * nights.
  */
 export function WeekGrid({
   me,
@@ -51,6 +52,13 @@ export function WeekGrid({
   const left = side.days.filter((d) => d.date >= from)
   const sits = left.reduce((s, d) => s + d.benched.length, 0)
   const empty = left.reduce((s, d) => s + d.open, 0)
+  const hasOpp = rosters.them.length > 0
+  const tally = [
+    { key: 'me' as const, name: names.me, days: me.days.map((d) => d.started.length), total: me.starts },
+    ...(hasOpp ? [{ key: 'them' as const, name: names.them, days: them.days.map((d) => d.started.length), total: them.starts }] : []),
+  ]
+  const leftOf = (s: SideProjection) => s.days.reduce((n, d) => n + (d.date >= from ? d.started.length : 0), 0)
+  const inProgress = side.days.some((d) => d.date < from) && left.length > 0
 
   const perDay = useMemo(
     () =>
@@ -72,6 +80,20 @@ export function WeekGrid({
   return (
     <div data-testid="week-grid">
       <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+        {hasOpp ? (
+          <Tip content={`Games in a starting slot (the ones that count), ${names.me} first; day by day in the grid. ${inProgress ? 'Days already played are counted with today’s rosters. ' : ''}Pickups and injuries change it.`}>
+            <span className="flex items-baseline gap-2" data-testid="games-tally">
+              <span className="font-display text-[34px] font-semibold leading-none tnum">
+                <span className={me.starts > them.starts ? 'text-plus' : me.starts < them.starts ? 'text-minus' : 'text-chalk'}>{me.starts}</span>
+                <span className="text-chalk-4">–</span>
+                {them.starts}
+              </span>
+              <span className="text-[13px] text-chalk-2">
+                games{inProgress ? ` · ${leftOf(me)}–${leftOf(them)} left` : ''}
+              </span>
+            </span>
+          </Tip>
+        ) : null}
         <Stat value={sits} label={sits === 1 ? 'start sits' : 'starts sit'} tone={sits ? 'text-warn' : 'text-chalk'} />
         <Stat value={empty} label={empty === 1 ? 'seat empty' : 'seats empty'} tone={empty ? 'text-chalk' : 'text-plus'} />
         <button
@@ -144,15 +166,34 @@ export function WeekGrid({
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td className="sticky left-0 z-10 h-9 border-t border-seam-strong bg-floor text-[12px] font-medium text-chalk-3">Starts</td>
-              {side.days.map((d) => (
-                <td key={d.date} className={cn('border-t border-seam-strong text-center font-mono text-[13px] font-semibold tnum', d.date < from && 'opacity-45')}>
-                  {d.started.length}
-                  <span className="font-normal text-chalk-4">/{seats}</span>
+            {tally.map((t, k) => (
+              <tr key={t.key} data-testid={`games-row-${t.key}`}>
+                <td className={cn('sticky left-0 z-10 h-9 border-t bg-floor pr-2', k === 0 ? 'border-seam-strong' : 'border-seam')}>
+                  <div className="flex items-baseline gap-2">
+                    <span className={cn('min-w-0 truncate text-[12px] font-medium', t.key === 'me' ? 'text-clock' : 'text-chalk-2')}>{t.name}</span>
+                    <Tip content={`${t.total} games in a starting slot this week`}>
+                      <span className="ml-auto shrink-0 font-mono text-[13px] font-semibold tnum text-chalk">{t.total}</span>
+                    </Tip>
+                  </div>
                 </td>
-              ))}
-            </tr>
+                {t.days.map((n, j) => {
+                  const other = tally.length > 1 ? tally[1 - k].days[j] : n
+                  return (
+                    <td
+                      key={side.days[j].date}
+                      className={cn(
+                        'border-t text-center font-mono text-[13px] tnum',
+                        k === 0 ? 'border-seam-strong' : 'border-seam',
+                        n > other ? 'font-semibold text-chalk' : n < other ? 'text-chalk-3' : 'text-chalk-2',
+                        side.days[j].date < from && 'opacity-45',
+                      )}
+                    >
+                      {n}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
             {rows.map((r, k) => {
               const divider = k === 0 || rows[k - 1].kind !== r.kind
               const edge = divider ? 'border-seam-strong' : 'border-seam'

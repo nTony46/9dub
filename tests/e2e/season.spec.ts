@@ -89,6 +89,10 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   // Week view (default): players × days, open seats, and NBA teams to stream from.
   const grid = page.getByTestId('week-grid')
   await expect(grid).toContainText('seats empty')
+  // Games that count, both sides: 2 of mine and 1 of theirs play each day.
+  await expect(page.getByTestId('games-tally')).toContainText('14–7')
+  await expect(page.getByTestId('games-row-me').locator('td')).toHaveText(['Test Squad14', ...Array(7).fill('2')])
+  await expect(page.getByTestId('games-row-them').locator('td')).toHaveText(['Team 27', ...Array(7).fill('1')])
   await expect(grid.locator('thead th')).toHaveCount(8) // player column + 7 days
   await expect(grid).toContainText('8 open') // 2 of my players play each day → 8 of 10 seats open
   await expect(grid).toContainText('UTIL') // rows by fantasy slot, like the day view
