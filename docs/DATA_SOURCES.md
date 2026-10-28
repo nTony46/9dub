@@ -6,6 +6,8 @@ The ingest writes a full report of every file, duplicate, conflict and incomplet
 
 ## Your own files: the local pipeline
 
+Most people import one CSV or pasted table in the app ([below](#other-ways-in-single-tables)). If you keep exports from several sources, put them in `Fantasy Draft Data/` (any names and sub-folders), or pass `-- --dir <folder>`, and run `npm run data:ingest`. It reconciles them into one private snapshot with full provenance. Print ESPN's projections from the league view that shows PTS and TO.
+
 ```
 Fantasy Draft Data/            (your files; read-only to 9dub; git-ignored)
   ├─ 2026-27 Ranking & Projections - <league> - ESPN Fantasy Basketball N.pdf   ESPN projections, one PDF per results page
@@ -65,6 +67,8 @@ How the ingest works:
 - Estimated values are marked "est." and are never presented as projections.
 
 **ESPN AVG PICK ceiling.** ESPN's Live Draft Trends reports about 140 for players rarely drafted. 9dub shows these as "140+" and does not use them as ADP for timing.
+
+**In the app**, *Player sheet → Sources & market* shows every source's own line side by side, plus where each field came from.
 
 ### Players without full data
 
