@@ -716,6 +716,7 @@ export const useApp = create<AppState>()((set, get) => {
           lastEspnNames: st.season.espn?.teamNames.length ? st.season.espn.teamNames : undefined,
           lineupSlots: st.settings.lineupSlots,
           irSlots: st.settings.irSlots,
+          needsStats: new Set((st.dataset?.players ?? []).filter((r) => !r.projection).map((r) => r.identity.id)),
         })
         if ('error' in plan) throw new Error(plan.error)
         const now = Date.now()
@@ -745,6 +746,7 @@ export const useApp = create<AppState>()((set, get) => {
               teamNames: snap.teams.map((t) => t.name),
               results: snap.results,
               standings: snap.standings,
+              stats: plan.stats,
             },
           },
           espnSyncing: false,

@@ -22,6 +22,7 @@ import { dateShort, num, pct, signed } from '@/lib/format'
 import { signClass } from '@/lib/diverging'
 import { useApp } from '@/store/appStore'
 import { teamLabel, useDraft, useEngine, useLive, type PlayerInfo } from '@/store/derived'
+import { lineSource } from '@/features/season/model'
 
 function Section({ title, children, aside }: { title: string; children: React.ReactNode; aside?: React.ReactNode }) {
   return (
@@ -229,8 +230,35 @@ function SheetBody({ id }: { id: string }) {
         <Section title="Projection">
           <p className="text-[12px] text-chalk-3">
             No projection for this season in any loaded source. {info.name} can be searched and drafted (so the board stays accurate), but is not valued or
-            recommended; on a roster his slot counts at replacement level.
+            recommended.{' '}
+            {info.standIn
+              ? 'For weekly matchups he counts at the estimate below, from his actual ESPN stats.'
+              : 'In weekly matchups he counts at replacement level until an ESPN sync brings his stats.'}
           </p>
+          {info.standIn ? (
+            <>
+              <div className="mt-3 grid grid-cols-10 gap-px overflow-hidden rounded-md border border-seam bg-seam text-center" data-testid="stand-in-line">
+                {[
+                  ['MIN', num(info.standIn.mpg)],
+                  ['PTS', num(info.standIn.line.pts)],
+                  ['3PM', num(info.standIn.line.tpm)],
+                  ['REB', num(info.standIn.line.reb)],
+                  ['AST', num(info.standIn.line.ast)],
+                  ['STL', num(info.standIn.line.stl, 2)],
+                  ['BLK', num(info.standIn.line.blk, 2)],
+                  ['TO', num(info.standIn.line.tov)],
+                  ['FG%', pct(info.standIn.line.fga ? info.standIn.line.fgm! / info.standIn.line.fga : null)],
+                  ['FT%', pct(info.standIn.line.fta ? info.standIn.line.ftm! / info.standIn.line.fta : null)],
+                ].map(([k, val]) => (
+                  <div key={k as string} className="bg-floor px-1 py-2">
+                    <div className="font-display text-[12px] font-semibold tracking-wide text-chalk-3">{k}</div>
+                    <div className="font-mono text-[14px] tnum">{val}</div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[12px] text-chalk-3">{lineSource(info)?.text}</p>
+            </>
+          ) : null}
         </Section>
       )}
 

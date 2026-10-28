@@ -61,6 +61,25 @@ export const EspnTotalsSchema = z.object({
 })
 export type EspnTotals = z.infer<typeof EspnTotalsSchema>
 
+/** A player's actual totals over a span (a season, or the last 15 days), with games and minutes. */
+export const EspnStatLineSchema = EspnTotalsSchema.extend({ gp: z.number(), min: z.number() })
+export type EspnStatLine = z.infer<typeof EspnStatLineSchema>
+
+/** ESPN's actual stats for a player (rostered, or a free agent near the top of the pool). */
+export const EspnPlayerStatsSchema = z.object({
+  espnId: z.number(),
+  name: z.string(),
+  nbaTeam: z.string().nullable(),
+  positions: z.array(z.enum(['PG', 'SG', 'SF', 'PF', 'C'])).default([]),
+  /** This season so far. */
+  season: EspnStatLineSchema.nullable(),
+  /** The last 15 days. */
+  recent: EspnStatLineSchema.nullable(),
+  /** Last season. */
+  prior: EspnStatLineSchema.nullable(),
+})
+export type EspnPlayerStats = z.infer<typeof EspnPlayerStatsSchema>
+
 export const EspnLiveSchema = z.object({
   /** ESPN matchup period (1 = the first week). */
   period: z.number().int(),
@@ -148,6 +167,8 @@ export const EspnSnapshotSchema = z.object({
   weeks: z.array(z.object({ period: z.number().int(), start: z.string(), end: z.string() })).default([]),
   /** The draft, only when the sync was asked for it (first-time setup). */
   draft: z.array(EspnDraftPickSchema).default([]),
+  /** Actual stats of rostered players and the top free agents (stand-ins for players without a projection). */
+  playerStats: z.array(EspnPlayerStatsSchema).default([]),
 })
 export type EspnSnapshot = z.infer<typeof EspnSnapshotSchema>
 
@@ -157,6 +178,8 @@ interface RawPlayer {
   proTeamId?: number
   injuryStatus?: string
   eligibleSlots?: number[]
+  /** statSourceId 0 = actual (1 = ESPN's projection, never used); statSplitTypeId 0 = season, 2 = last 15 days. */
+  stats?: { seasonId?: number; statSourceId?: number; statSplitTypeId?: number; stats?: Record<string, number> }[]
 }
 interface RawSide {
   teamId?: number
@@ -205,6 +228,34 @@ const STAT_KEYS: Readonly<Record<string, keyof EspnTotals>> = { '0': 'pts', '1':
 /** ESPN scoring stat ids → the nine categories, for ESPN's per-category result. */
 const CATEGORY_STATS: Readonly<Record<string, Category>> = { '19': 'FG', '20': 'FT', '17': '3PM', '0': 'PTS', '6': 'REB', '3': 'AST', '2': 'STL', '1': 'BLK', '11': 'TO' }
 const CALLS: Readonly<Record<string, 'W' | 'L' | 'T'>> = { WIN: 'W', LOSS: 'L', TIE: 'T' }
+
+/** ESPN player stat ids for games played and minutes. */
+const GP_STAT = '42'
+const MIN_STAT = '40'
+
+/** One span of a player's actual stats (null when he hasn't played in it). */
+function statLineOf(p: RawPlayer, seasonId: number, split: number): EspnStatLine | null {
+  const s = p.stats?.find((x) => x.seasonId === seasonId && x.statSourceId === 0 && x.statSplitTypeId === split)?.stats
+  const gp = Number(s?.[GP_STAT] ?? 0) || 0
+  if (!s || gp <= 0) return null
+  const line: EspnStatLine = { gp, min: Number(s[MIN_STAT] ?? 0) || 0, pts: 0, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, ftm: 0, fta: 0 }
+  for (const [id, key] of Object.entries(STAT_KEYS)) line[key] = Number(s[id] ?? 0) || 0
+  return line
+}
+
+/** A player's actual stats this season, over the last 15 days and last season. */
+export function playerStatsOf(p: RawPlayer, seasonId: number, codes: ReadonlyMap<number, string>): EspnPlayerStats | null {
+  if (p.id == null || !p.fullName) return null
+  return {
+    espnId: p.id,
+    name: p.fullName,
+    nbaTeam: p.proTeamId != null ? (codes.get(p.proTeamId) ?? null) : null,
+    positions: POSITION_SLOTS.filter((_, i) => p.eligibleSlots?.includes(i)),
+    season: statLineOf(p, seasonId, 0),
+    recent: statLineOf(p, seasonId, 2),
+    prior: statLineOf(p, seasonId - 1, 0),
+  }
+}
 
 function totalsOf(side: RawSide | undefined): EspnTotals {
   const out: EspnTotals = { pts: 0, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, ftm: 0, fta: 0 }
@@ -307,6 +358,8 @@ export interface SnapshotOptions {
   swid?: string | null
   /** ESPN player id → name and pro team, for drafted players no longer on a roster; given only when the draft is wanted. */
   players?: ReadonlyMap<number, { name: string; proTeamId: number | null }>
+  /** Raw free agents from ESPN's player list (`kona_player_info`), for their stats. */
+  freeAgents?: readonly { player?: RawPlayer }[]
 }
 
 /** Raw ESPN league JSON (views mTeam, mRoster, mSettings, mMatchup, mDraftDetail) + proTeams → snapshot. Throws on a shape it can't read. */
@@ -417,6 +470,14 @@ export function snapshotFromEspn(rawLeague: unknown, rawProTeams: unknown, fetch
         .sort((a, b) => a.overall - b.overall)
     : []
   const gameDates = ((rawProTeams as RawProTeams)?.games ?? []).map((g) => nbaDate(g.start))
+  const statsSeason = league.seasonId ?? 0
+  const seen = new Set<number>()
+  const playerStats = [
+    ...league.teams.flatMap((t) => (t.roster?.entries ?? []).map((e) => e.playerPoolEntry?.player)),
+    ...(opts.freeAgents ?? []).map((f) => f.player),
+  ]
+    .map((p) => (p ? playerStatsOf(p, statsSeason, codes) : null))
+    .filter((p): p is EspnPlayerStats => p != null && !seen.has(p.espnId) && !!seen.add(p.espnId))
   return EspnSnapshotSchema.parse({
     kind: 'espn-league',
     fetchedAt,
@@ -434,6 +495,7 @@ export function snapshotFromEspn(rawLeague: unknown, rawProTeams: unknown, fetch
     mySlot: mine?.id != null ? (slots.get(mine.id) ?? null) : null,
     weeks: matchupWeeks(gameDates, regularSeasonPeriods),
     draft,
+    playerStats,
   })
 }
 

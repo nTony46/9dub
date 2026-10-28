@@ -31,6 +31,7 @@ import {
   type ValuationResult,
 } from '@/analytics'
 import { DEFAULT_LINEUP, slotDefs, type Position, type SlotDef } from '@/analytics/positions'
+import { standInLine, type StandIn } from '@/analytics/standIn'
 import { toEngineLine, type VolumeOrigin } from '@/data/engineAdapter'
 import { normalizeName, qualityLevel } from '@/data/normalize'
 import type { DatasetRecord, DatasetSnapshot, PlayerProjection, ProjectionOverride } from '@/data/schema'
@@ -76,6 +77,8 @@ export interface PlayerInfo {
   quality: 'complete' | 'partial' | 'limited' | 'none'
   overridden: boolean
   searchKey: string
+  /** No projection: a per-game line from his actual ESPN stats, used for weekly matchups only (never valued). */
+  standIn: StandIn | null
 }
 
 export interface EngineData {
@@ -168,6 +171,7 @@ const computeEngine = memoOne(
         quality: !li ? 'none' : v?.complete ? (p ? qualityLevel(p.completenessFlags.filter((f) => f !== 'missing-fga' && f !== 'missing-fta' && f !== 'pct-without-volume')) : 'complete') : 'limited',
         overridden: !!overrides[r.identity.id],
         searchKey: [r.identity.fullName, ...r.identity.aliases].map(normalizeName).join(' | '),
+        standIn: null,
       }
     })
     const byId = new Map(players.map((p) => [p.id, p]))
@@ -192,16 +196,29 @@ const projectedCount = (d: DatasetSnapshot) => d.players.reduce((n, r) => n + (r
  * After an ESPN sync, rostered players take ESPN's current NBA team and
  * position eligibility (what the schedule and lineups should use). Values are
  * unchanged: only the identity fields shown and scheduled are swapped.
+ * Players without a projection that ESPN has stats for (rostered, or near the
+ * top of free agency) get a stand-in line for weekly matchups, and free
+ * agents among them ESPN's team and eligibility too.
  */
-const withEspn = memoOne((engine: EngineData, espn: EspnSync['players'] | undefined): EngineData => {
-  if (!espn || !Object.keys(espn).length) return engine
+const withEspn = memoOne((engine: EngineData, espn: EspnSync['players'] | undefined, stats: EspnSync['stats'] | undefined): EngineData => {
+  if ((!espn || !Object.keys(espn).length) && (!stats || !Object.keys(stats).length)) return engine
+  const typical = typicalLine(engine)
   const players = engine.players.map((p) => {
-    const e = espn[p.id]
-    if (!e) return p
-    return { ...p, team: e.team ?? p.team, positions: e.positions.length ? e.positions : p.positions }
+    const e = espn?.[p.id]
+    const st = !p.line ? stats?.[p.id] : undefined
+    if (!e && !st) return p
+    const team = e ? (e.team ?? p.team) : (st?.team ?? p.team)
+    const positions = e?.positions.length ? e.positions : st?.positions.length ? st.positions : p.positions
+    return { ...p, team, positions, standIn: st ? standInLine(st.season, st.recent, st.prior, typical) : null }
   })
   return { ...engine, players, byId: new Map(players.map((p) => [p.id, p])) }
 })
+
+/** Replacement level as per-game production and minutes (the band's projected MPG), for stand-ins with no usable last season. */
+function typicalLine(engine: EngineData): { line: StatLine; mpg: number } | null {
+  const mins = engine.valuation.replacement.ids.map((id) => engine.byId.get(id)?.proj?.minutesPerGame).filter((m): m is number => m != null && m > 0)
+  return mins.length ? { line: engine.valuation.replacement.line, mpg: mins.reduce((a, b) => a + b, 0) / mins.length } : null
+}
 
 export function getEngine(s: ReturnType<typeof useApp.getState>): EngineData | null {
   if (!s.dataset || projectedCount(s.dataset) < 2) return null
@@ -209,6 +226,7 @@ export function getEngine(s: ReturnType<typeof useApp.getState>): EngineData | n
   return withEspn(
     computeEngine(s.dataset, s.overrides, st.poolSize, st.teams, st.rounds, st.fullSeasonGames, st.valuationBasis, st.projectionProfile, st.estimateMissingVolume),
     s.season.espn?.players,
+    s.season.espn?.stats,
   )
 }
 
@@ -217,10 +235,12 @@ export function useEngine(): EngineData | null {
   const overrides = useApp((s) => s.overrides)
   const st = useApp((s) => s.settings)
   const espn = useApp((s) => s.season.espn?.players)
+  const stats = useApp((s) => s.season.espn?.stats)
   if (!dataset || projectedCount(dataset) < 2) return null
   return withEspn(
     computeEngine(dataset, overrides, st.poolSize, st.teams, st.rounds, st.fullSeasonGames, st.valuationBasis, st.projectionProfile, st.estimateMissingVolume),
     espn,
+    stats,
   )
 }
 

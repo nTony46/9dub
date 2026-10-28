@@ -9,7 +9,7 @@ import { cn } from '@/lib/cn'
 import { useApp } from '@/store/appStore'
 import type { EngineData } from '@/store/derived'
 import { irPlacement } from '@/store/season'
-import { dayLabel, shortName, type ScheduleIndex } from './model'
+import { dayLabel, lineSource, shortName, type ScheduleIndex } from './model'
 
 const CITY: Record<string, string> = Object.fromEntries(Object.entries(NBA_CITY_CODES).map(([city, code]) => [code, city]))
 const dow = (iso: string) => dayLabel(iso).dow
@@ -225,7 +225,7 @@ export function WeekGrid({
                               <div>{game ? `${game}` : 'No game'} · {w?.games ?? 0} game{w?.games === 1 ? '' : 's'} this week</div>
                               {state === 'sits' ? <div className="text-warn">Has a game, but every seat he fits is taken.</div> : null}
                               {state === 'out' ? <div className="text-bad">Marked out.</div> : null}
-                              {game && !p?.line ? <div>No projection in your data: counts at replacement level.</div> : null}
+                              {p && lineSource(p) ? <div>{lineSource(p)!.text}</div> : null}
                             </div>
                           }
                         >

@@ -106,7 +106,7 @@ Press `?` in the app for the full list. Shortcuts never fire while you're typing
 
 ## Limitations
 
-- **Projections are only as good as what you import.** Players whose source has no shooting attempts can't be valued on FG% or FT%, so they're badged *partial*. Deep picks may have no projection at all.
+- **Projections are only as good as what you import.** Players whose source has no shooting attempts can't be valued on FG% or FT%, so they're badged *partial*. Deep picks may have no projection at all. In weekly matchups those players count at an estimate from their ESPN stats (*est.*), or at replacement level without them (*repl.*). Their player card shows the numbers used.
 - **ESPN ADP** comes from ESPN's public drafts and flattens near pick 140. Treat it as relative order, not exact pick numbers.
 - **Injury tags** come from your files or from ESPN at each sync. There is no other injury feed.
 - **No probabilities.** There are no H2H win probabilities, ADP survival odds, opponent draft simulation or end-of-draft projections, because there's no model and data that could calibrate them.

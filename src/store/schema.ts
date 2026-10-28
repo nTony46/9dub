@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { CATEGORIES } from '@/analytics/categories'
 import { DEFAULT_LINEUP } from '@/analytics/positions'
-import { EspnLiveSchema, EspnResultSchema, EspnStandingSchema } from '@/data/espn'
+import { EspnLiveSchema, EspnResultSchema, EspnStandingSchema, EspnStatLineSchema } from '@/data/espn'
 import { DatasetSnapshotSchema, OverrideSchema, PositionSchema } from '@/data/schema'
 
 /**
@@ -148,6 +148,19 @@ export const EspnSyncSchema = z.object({
   results: z.array(EspnResultSchema).default([]),
   /** Season records in categories and places, as ESPN's standings have them. */
   standings: z.array(EspnStandingSchema).default([]),
+  /** Actual stats of players your data has no projection for (rostered, or near the top of free agency): their stand-in lines. */
+  stats: z
+    .record(
+      z.string(),
+      z.object({
+        team: z.string().nullable(),
+        positions: z.array(PositionSchema),
+        season: EspnStatLineSchema.nullable(),
+        recent: EspnStatLineSchema.nullable(),
+        prior: EspnStatLineSchema.nullable(),
+      }),
+    )
+    .default({}),
 })
 export type EspnSync = z.infer<typeof EspnSyncSchema>
 

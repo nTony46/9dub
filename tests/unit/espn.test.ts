@@ -373,3 +373,65 @@ describe('the season calendar from ESPN', () => {
     expect(ESPN_DEFAULT_SLOTS.map((s) => s.id)).toEqual(['PG', 'SG', 'SF', 'PF', 'C', 'G', 'F', 'UTIL1', 'UTIL2', 'UTIL3', 'BE1', 'BE2', 'BE3'])
   })
 })
+
+describe('player stats for stand-in lines', () => {
+  // ESPN stat ids: 0 PTS, 1 BLK, 2 STL, 3 AST, 6 REB, 11 TO, 13 FGM, 14 FGA, 15 FTM, 16 FTA, 17 3PM, 40 MIN, 42 GP.
+  const ids = (o: Record<string, number>) => o
+  const withStats = {
+    ...rawLeague,
+    teams: rawLeague.teams.map((t) =>
+      t.id !== 7
+        ? t
+        : {
+            ...t,
+            roster: {
+              entries: t.roster.entries.map((e) => ({
+                ...e,
+                playerPoolEntry: {
+                  player: {
+                    ...e.playerPoolEntry.player,
+                    stats: [
+                      { seasonId: 2027, statSourceId: 0, statSplitTypeId: 0, stats: ids({ '0': 26, '1': 2, '2': 3, '3': 9, '6': 11, '11': 3, '13': 9, '14': 19, '15': 6, '16': 8, '17': 2, '40': 90, '42': 4 }) },
+                      { seasonId: 2027, statSourceId: 1, statSplitTypeId: 0, stats: ids({ '0': 999, '42': 70 }) }, // ESPN's projection: never used
+                      { seasonId: 2027, statSourceId: 0, statSplitTypeId: 2, stats: ids({ '0': 26, '40': 90, '42': 4 }) },
+                      { seasonId: 2026, statSourceId: 0, statSplitTypeId: 0, stats: ids({ '0': 400, '40': 900, '42': 50 }) },
+                    ],
+                  },
+                },
+              })),
+            },
+          },
+    ),
+  }
+  const freeAgents = [
+    { player: { id: 90, fullName: 'Fresh Pickup', proTeamId: 18, eligibleSlots: [0, 1], stats: [{ seasonId: 2027, statSourceId: 0, statSplitTypeId: 0, stats: ids({ '0': 30, '40': 60, '42': 3 }) }] } },
+    { player: { id: 70, fullName: 'Nikola Jokić', proTeamId: 7, stats: [] } }, // also rostered: kept once
+  ]
+  const snap = snapshotFromEspn(withStats, rawPro, FETCHED, { freeAgents })
+
+  it('reads actual stats only (this season, last 15 days, last season) for rostered players and free agents', () => {
+    const jokic = snap.playerStats.find((p) => p.espnId === 70)!
+    expect(jokic.season).toEqual({ gp: 4, min: 90, pts: 26, tpm: 2, reb: 11, ast: 9, stl: 3, blk: 2, tov: 3, fgm: 9, fga: 19, ftm: 6, fta: 8 })
+    expect(jokic.recent).toMatchObject({ gp: 4, min: 90, pts: 26 })
+    expect(jokic.prior).toMatchObject({ gp: 50, min: 900, pts: 400 })
+    expect(snap.playerStats.filter((p) => p.espnId === 70)).toHaveLength(1)
+    expect(snap.playerStats.find((p) => p.espnId === 90)).toMatchObject({ name: 'Fresh Pickup', nbaTeam: 'NYK', positions: ['PG', 'SG'], recent: null, prior: null })
+    expect(snap.playerStats.find((p) => p.espnId === 30)).toMatchObject({ season: null, recent: null, prior: null }) // no stats given
+  })
+
+  it('keeps stats only for the players that need them (no projection)', () => {
+    const records = [
+      { id: 'jokic', fullName: 'Nikola Jokic', aliases: [], nbaTeam: 'DEN' },
+      { id: 'brunson', fullName: 'Jalen Brunson', aliases: [], nbaTeam: 'NYK' },
+      { id: 'morant', fullName: 'Ja Morant', aliases: [], nbaTeam: 'MEM' },
+      { id: 'pickup', fullName: 'Fresh Pickup', aliases: [], nbaTeam: null },
+    ]
+    const input: EspnPlanInput = { records, draftRosters: [['jokic'], ['brunson', 'morant']], moves: [], injuries: [], teamNames: [], teams: 2, userSlot: 1, weeks: [], today: '2026-10-21' }
+    const plan = planEspnSync(snap, { ...input, needsStats: new Set(['jokic', 'pickup']) })
+    if ('error' in plan) throw new Error(plan.error)
+    expect(Object.keys(plan.stats).sort()).toEqual(['jokic', 'pickup'])
+    expect(plan.stats.pickup).toMatchObject({ team: 'NYK', positions: ['PG', 'SG'], season: { gp: 3, min: 60, pts: 30 } })
+    // Roster matching is unaffected by the stats.
+    expect(plan.moves).toEqual([])
+  })
+})

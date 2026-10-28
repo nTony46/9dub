@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { nbaScheduleFromEspn, snapshotFromEspn, type EspnSnapshot } from '../src/data/espn.ts'
+import { nbaScheduleFromEspn, snapshotFromEspn, type EspnSnapshot, type SnapshotOptions } from '../src/data/espn.ts'
 import type { NbaSchedule } from '../src/data/schedule.ts'
 
 /**
@@ -128,6 +128,40 @@ async function playerNames(auth: EspnAuth, season: number, ids: number[]): Promi
   return out
 }
 
+const FREE_AGENT_TTL_MS = 60 * 60 * 1000
+/** How many free agents (by % rostered) to read stats for. */
+const FREE_AGENT_LIMIT = 100
+
+/**
+ * The most-rostered free agents with their actual stats (this season, last 15 days, last season),
+ * for stand-in lines when a player has no projection. Cached an hour; an error here never fails a sync.
+ */
+async function freeAgents(root: string, auth: EspnAuth, season: number): Promise<{ player?: unknown }[]> {
+  const file = join(dir(root), CACHE_DIR, `free-agents-${auth.leagueId}-${season}.json`)
+  if (existsSync(file) && Date.now() - statSync(file).mtimeMs < FREE_AGENT_TTL_MS) return JSON.parse(readFileSync(file, 'utf8'))
+  const filter = JSON.stringify({
+    players: {
+      filterStatus: { value: ['FREEAGENT', 'WAIVERS'] },
+      filterStatsForSourceIds: { value: [0] },
+      filterStatsForSplitTypeIds: { value: [0, 2] },
+      sortPercOwned: { sortPriority: 1, sortAsc: false },
+      limit: FREE_AGENT_LIMIT,
+    },
+  })
+  try {
+    const j = (await espnRead(`${ESPN_READ_BASE}/seasons/${season}/segments/0/leagues/${auth.leagueId}?view=kona_player_info`, auth, { 'x-fantasy-filter': filter })) as {
+      players?: { player?: { id?: number; fullName?: string; proTeamId?: number; eligibleSlots?: number[]; stats?: unknown } }[]
+    }
+    // Kept: identity, team, eligibility and stats.
+    const slim = (j.players ?? []).map(({ player: p }) => ({ player: p && { id: p.id, fullName: p.fullName, proTeamId: p.proTeamId, eligibleSlots: p.eligibleSlots, stats: p.stats } }))
+    mkdirSync(join(dir(root), CACHE_DIR), { recursive: true })
+    writeFileSync(file, JSON.stringify(slim), { mode: 0o600 })
+    return slim
+  } catch {
+    return []
+  }
+}
+
 /** The season's NBA games from ESPN (cached a day), as 9dub's schedule. */
 export async function fetchNbaSchedule(root: string, season: number, label: string): Promise<NbaSchedule> {
   const auth = readEspnAuth(root)
@@ -159,7 +193,11 @@ export async function fetchEspnSnapshot(root: string, fallbackSeason: number, op
     const missing = [...new Set((league.draftDetail?.picks ?? []).map((p) => p.playerId).filter((id): id is number => id != null && id > 0 && !rostered.has(id)))]
     players = await playerNames(auth, season, missing)
   }
-  const snap = snapshotFromEspn(league, await proTeams(root, auth, season), new Date().toISOString(), { swid: auth.swid, players })
+  const snap = snapshotFromEspn(league, await proTeams(root, auth, season), new Date().toISOString(), {
+    swid: auth.swid,
+    players,
+    freeAgents: (await freeAgents(root, auth, season)) as SnapshotOptions['freeAgents'],
+  })
   const cache = join(dir(root), CACHE_DIR)
   mkdirSync(cache, { recursive: true })
   writeFileSync(join(cache, 'latest.json'), JSON.stringify(snap), { mode: 0o600 })

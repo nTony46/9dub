@@ -305,7 +305,13 @@ A weak category becomes a **punt candidate** only when all of these hold:
 
 ## 14. Weekly matchups (`matchup.ts`)
 
-- **Games:** for each day of the matchup, a player counts only if his NBA team plays that day (official schedule, `npm run data:schedule`). Free agents and players without a projection never count.
+- **Games:** for each day of the matchup, a player counts only if his NBA team plays that day (the NBA schedule, from ESPN or `npm run data:schedule`). Free agents never count for a team.
+- **Players without a projection** (often fresh waiver pickups) still play their games and take lineup seats. They count at a **stand-in line** from their actual ESPN stats (`standIn.ts`), labelled *est.*:
+  - minutes per game from this season, with the last 15 days counted twice (a bigger role shows up within a few games) and 3 games of last season's minutes (or a typical player's) so one game can't set a role;
+  - per-minute production from this season blended with 300 minutes of last season's rates, or replacement-level rates when last season is too short (under 200 minutes). Makes and attempts blend separately, so FG% and FT% shrink by volume too;
+  - no games yet this season: last season's per-game line (10+ games), else replacement level, labelled *repl.*
+  
+  Stand-ins are used only for weekly matchups and pickups. They are never valued or recommended in the draft tools, and ESPN's own projections are never used.
 - **Lineups:** each day is set like ESPN's Quick Lineup. The players with games fill ESPN's 10 starting slots by maximum matching, best 9-cat value first; nobody with a game sits unless every slot he fits is taken. Anyone left over is **benched** for that day, and the benched games are shown.
 - **Open seats and streaming:** each day's open seats are the starting slots nobody with a game fills. A probe player of each position, added last, shows which positions would add a start (when only the C slot is open, only a C helps). Team suggestions count each NBA team's games on open nights from today on, rank teams by nights where any position starts, and flag consecutive open nights they cover (back-to-backs). There are no player picks; the manager chooses by category need.
 - **Displayed lineup:** each player has a usual slot (the best lineup by 9-cat value). Every day the players who start keep their usual slot where possible; bench players with a game move into the seats of starters without one, taking an empty seat before anyone is reshuffled. Players without a game only fill seats that are still empty, their own slot first. This changes only where players are shown, never who counts.

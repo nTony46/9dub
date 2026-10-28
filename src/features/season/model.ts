@@ -6,7 +6,7 @@ import { ESPN_DEFAULT_SLOTS, fillLineup, type SlotDef } from '@/analytics/positi
 import type { EspnResultSide } from '@/data/espn'
 import { datesBetween, teamsByDate, type NbaSchedule } from '@/data/schedule'
 import { useApp } from '@/store/appStore'
-import { teamLabel, useDraft, type EngineData } from '@/store/derived'
+import { teamLabel, useDraft, type EngineData, type PlayerInfo } from '@/store/derived'
 import { activeInjuries, currentRosters, todayIso, type CurrentRosters } from '@/store/season'
 import type { EspnSync, LeagueSettings, MatchupWeek } from '@/store/schema'
 
@@ -56,9 +56,10 @@ export interface ProjectionOptions {
 
 /**
  * Rostered players as the weekly engine sees them. A player your data has no
- * projection for (often a fresh waiver pickup) still plays his games: he takes
- * a lineup seat like on ESPN and counts at replacement level, the same
- * stand-in the draft engine uses for unprojected roster spots.
+ * projection for (often a fresh waiver pickup) still plays his games and takes
+ * a lineup seat like on ESPN. He counts at his stand-in line from ESPN's actual
+ * stats when the sync has them, else at replacement level (the stand-in the
+ * draft engine uses for unprojected roster spots).
  */
 export function matchupPlayers(ids: readonly string[], engine: EngineData, opts: ProjectionOptions): MatchupPlayer[] {
   const { valuation, ctx } = engine
@@ -72,12 +73,22 @@ export function matchupPlayers(ids: readonly string[], engine: EngineData, opts:
         id: p.id,
         nbaTeam: p.team,
         positions: p.positions,
-        line: p.line ?? valuation.replacement.line,
+        line: p.line ?? p.standIn?.line ?? valuation.replacement.line,
         priority: v ? (ctx.basis === 'gpAware' ? v.rankGp : v.rank) : 9999,
         availability: opts.availability && p.gp != null ? Math.min(1, p.gp / full) : 1,
         outThrough: opts.injuries?.has(p.id) ? (opts.injuries.get(p.id) ?? null) : undefined,
       }
     })
+}
+
+/** Where a player's weekly numbers come from when he has no projection: a short tag and a sentence (null = his projection). */
+export function lineSource(p: Pick<PlayerInfo, 'line' | 'standIn'>): { tag: string; text: string } | null {
+  if (p.line) return null
+  const s = p.standIn
+  if (!s) return { tag: 'repl.', text: 'No projection or ESPN stats: counts at replacement level.' }
+  if (!s.games) return { tag: 'est.', text: 'No projection: last season’s per-game stats (ESPN), since he hasn’t played this season.' }
+  const blend = s.prior === 'last-season' ? ', blended with last season' : s.prior === 'typical' ? ', blended with a typical waiver-level player' : ''
+  return { tag: 'est.', text: `No projection: estimated from ESPN stats, ${s.games} game${s.games === 1 ? '' : 's'} this season at ${s.mpg.toFixed(1)} min${blend}.` }
 }
 
 export interface WeekProjection {

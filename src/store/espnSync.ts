@@ -3,7 +3,7 @@ import type { EspnDraftPick, EspnSnapshot } from '@/data/espn'
 import { normalizeName } from '@/data/normalize'
 import type { DatasetRecord } from '@/data/schema'
 import { teamForPick } from './draftLogic'
-import type { DraftPick, Injury, MatchupWeek, RosterMove } from './schema'
+import type { DraftPick, EspnSync, Injury, MatchupWeek, RosterMove } from './schema'
 import { activeInjuries, currentRosters } from './season'
 
 /** The note on injuries the sync manages (players ESPN has in an IR slot); injuries you mark yourself are never touched. */
@@ -48,6 +48,8 @@ export interface EspnPlan {
   unmatched: string[]
   /** ESPN's lineup when it differs from 9dub's (null = unchanged). */
   lineup: { slots: string[]; ir: number } | null
+  /** Actual stats of the players in `needsStats` that ESPN returned. */
+  stats: EspnSync['stats']
 }
 
 export interface EspnPlanInput {
@@ -64,6 +66,8 @@ export interface EspnPlanInput {
   lastEspnNames?: readonly string[]
   lineupSlots?: readonly string[]
   irSlots?: number
+  /** Players whose stats to keep (those without a projection); all matched players when omitted. */
+  needsStats?: ReadonlySet<string>
 }
 
 /**
@@ -161,6 +165,15 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
     snap.lineup && input.lineupSlots && (snap.lineup.ir !== input.irSlots || snap.lineup.slots.join(' ') !== input.lineupSlots.join(' ')) ? snap.lineup : null
   if (lineup) changes.push(`Lineup: ${lineup.slots.join(' ')}${lineup.ir ? ` + ${lineup.ir} IR` : ''}`)
 
+  // Stats are matched on their own (rostered players and free agents alike), so roster matching is unaffected.
+  const matchStats = nameMatcher(input.records)
+  const stats: EspnSync['stats'] = {}
+  for (const p of snap.playerStats) {
+    const id = matchStats(p.name, p.nbaTeam)
+    if (!id || (input.needsStats && !input.needsStats.has(id))) continue
+    stats[id] = { team: p.nbaTeam, positions: p.positions, season: p.season, recent: p.recent, prior: p.prior }
+  }
+
   return {
     moves,
     irAdd,
@@ -171,6 +184,7 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
     changes,
     unmatched,
     lineup,
+    stats,
   }
 }
 

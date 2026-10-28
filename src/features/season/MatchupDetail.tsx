@@ -11,12 +11,12 @@ import { Segmented, Select, Switch } from '@/components/ui/Controls'
 import { Tip } from '@/components/ui/Tooltip'
 import { cn } from '@/lib/cn'
 import { useApp } from '@/store/appStore'
-import { teamLabel, type EngineData } from '@/store/derived'
+import { teamLabel, type EngineData, type PlayerInfo } from '@/store/derived'
 import { applyTrade, irPlacement, todayIso, type TradeDraft } from '@/store/season'
 import type { MatchupWeek } from '@/store/schema'
 import { PlayerPicker } from './PlayerPicker'
 import { WeekGrid } from './WeekGrid'
-import { chasePlan, dayLabel, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
+import { chasePlan, dayLabel, lineSource, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
 
 const pct3 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(3).replace(/^0/, ''))
 const n1 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(1))
@@ -77,7 +77,7 @@ export function MatchupDetail({
   // Pickups for the rest of this week: free agents (on no roster as of the last sync), tried in place of the drop.
   const injuries = useApp((s) => s.season.injuries)
   const pool = useMemo(
-    () => engine.players.filter((p) => p.line && p.team && !teamOf.has(p.id) && !injuries.some((i) => i.playerId === p.id) && p.rec.provenance?.status?.tag !== 'out').map((p) => p.id),
+    () => engine.players.filter((p) => (p.line || p.standIn) && p.team && !teamOf.has(p.id) && !injuries.some((i) => i.playerId === p.id) && p.rec.provenance?.status?.tag !== 'out').map((p) => p.id),
     [engine, teamOf, injuries],
   )
   const rank = (id: string) => {
@@ -240,6 +240,17 @@ export function MatchupDetail({
 
       <WeekTotals proj={proj} engine={engine} myName={myName} oppName={oppLabel} roster={{ me: rosters[me], them: opp == null ? [] : rosters[opp] }} opts={opts} />
     </section>
+  )
+}
+
+/** "est." / "repl." beside a player with no projection, explaining the numbers used for him. */
+function SourceTag({ p }: { p: Pick<PlayerInfo, 'line' | 'standIn'> }) {
+  const src = lineSource(p)
+  if (!src) return null
+  return (
+    <Tip content={src.text}>
+      <span className="shrink-0 text-[11px] text-chalk-4">{src.tag}</span>
+    </Tip>
   )
 }
 
@@ -531,6 +542,7 @@ function Pickups({
                 </button>
                 <Positions positions={p?.positions ?? []} className="shrink-0 text-[11px]" />
                 <span className="shrink-0 font-mono text-[11.5px] text-chalk-3">{p?.team}</span>
+                {p ? <SourceTag p={p} /> : null}
                 <span className="shrink-0 text-[12px] text-chalk-3">
                   {o.starts} start{o.starts === 1 ? '' : 's'}
                 </span>
@@ -649,11 +661,7 @@ function LineupCard({
               {p.name}
             </button>
             <Positions positions={p.positions} className="hidden shrink-0 text-[11px] sm:inline" />
-            {!p.line ? (
-              <Tip content="No projection in your data: counts at replacement level.">
-                <span className="shrink-0 text-[11px] text-chalk-4">repl.</span>
-              </Tip>
-            ) : null}
+            <SourceTag p={p} />
             <span className={cn('ml-auto shrink-0 font-mono text-[12.5px] tnum', tone ?? 'text-chalk-2')}>{note ?? (p.team ? (games?.get(p.team) ?? 'no game') : 'FA')}</span>
             <button
               type="button"
@@ -982,7 +990,7 @@ function WeekTotals({
             </thead>
             <tbody>
               {rows.map(({ id, p, w }) => {
-                const l = p?.line ?? (p ? engine.valuation.replacement.line : null)
+                const l = p?.line ?? p?.standIn?.line ?? (p ? engine.valuation.replacement.line : null)
                 const a = opts.availability && p?.gp != null ? Math.min(1, p.gp / full) : 1
                 return (
                   <tr key={id} className="h-9 border-t border-seam">
@@ -993,13 +1001,7 @@ function WeekTotals({
                         </button>
                         <span className="shrink-0 text-[12px] text-chalk-3">{p?.team ?? 'FA'}</span>
                         {w?.missed ? <Badge tone="bad">out {w.missed}g</Badge> : null}
-                        {p && !p.line ? (
-                          <Tip content="No projection in your data: counts at replacement level.">
-                            <span>
-                              <Badge tone="outline">no projection</Badge>
-                            </span>
-                          </Tip>
-                        ) : null}
+                        {p ? <SourceTag p={p} /> : null}
                       </span>
                     </td>
                     <td className={cn('px-2 text-right font-mono tnum', w?.benched ? 'text-warn' : 'text-chalk-2')}>{w && l ? `${w.starts} / ${w.games}` : '—'}</td>
