@@ -2,6 +2,7 @@ import { Info } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { SideProjection } from '@/analytics/matchup'
 import { streamingTeams, type TeamFit } from '@/analytics/streaming'
+import { Button } from '@/components/ui/Button'
 import { Segmented } from '@/components/ui/Controls'
 import { Tip } from '@/components/ui/Tooltip'
 import { NBA_CITY_CODES } from '@/data/schedule'
@@ -30,6 +31,7 @@ export function WeekGrid({
   engine,
   index,
   from,
+  started,
 }: {
   me: SideProjection
   them: SideProjection
@@ -39,6 +41,8 @@ export function WeekGrid({
   index: ScheduleIndex
   /** First day still to play (today, or the week's start if it hasn't begun). */
   from: string
+  /** NBA teams whose game on `from` had started at the last ESPN sync. */
+  started?: ReadonlySet<string>
 }) {
   const [who, setWho] = useState<'me' | 'them'>('me')
   const [legend, setLegend] = useState(false)
@@ -254,7 +258,7 @@ export function WeekGrid({
                 </tr>
               )
             })}
-            {who === 'me' ? <StreamingRows days={me.days} index={index} from={from} /> : null}
+            {who === 'me' ? <StreamingRows days={me.days} index={index} from={from} started={started} /> : null}
           </tbody>
         </table>
       </div>
@@ -280,17 +284,31 @@ function Legend({ cls, text }: { cls: string; text: string }) {
   )
 }
 
+/** Teams shown before "Show all". */
+const STREAM_ROWS = 8
+
 /**
  * NBA teams to stream from, as rows aligned with the player grid: each team's
  * game sits under its day — filled on open nights, dashed when only one
- * position adds a start, muted when the night is already full.
+ * position adds a start, muted when the night is already full or the game has
+ * started.
  */
-function StreamingRows({ days, index, from }: { days: SideProjection['days']; index: ScheduleIndex; from: string }) {
+function StreamingRows({ days, index, from, started }: { days: SideProjection['days']; index: ScheduleIndex; from: string; started?: ReadonlySet<string> }) {
   const [mode, setMode] = useState<'open' | 'b2b'>('open')
-  const fits = useMemo(() => streamingTeams(days, (d) => index.byDate.get(d), from), [days, index, from])
+  const [all, setAll] = useState(false)
+  const fits = useMemo(() => {
+    const teamsOn = (d: string) => {
+      const teams = index.byDate.get(d)
+      return d === from && started?.size && teams ? new Set([...teams].filter((t) => !started.has(t))) : teams
+    }
+    return streamingTeams(days, teamsOn, from)
+  }, [days, index, from, started])
   const anyDays = (f: TeamFit) => f.days.filter((d) => !d.positions).length
   const ranked = [...fits].sort((a, b) => anyDays(b) - anyDays(a) || b.days.length - a.days.length || b.b2b.length - a.b2b.length || b.teamGames - a.teamGames)
-  const rows = (mode === 'b2b' ? ranked.filter((f) => f.b2b.length) : ranked).slice(0, mode === 'b2b' ? 12 : 8)
+  const listed = mode === 'b2b' ? ranked.filter((f) => f.b2b.length) : ranked
+  const rows = all ? listed : listed.slice(0, STREAM_ROWS)
+  const top = mode === 'open' && ranked.length ? anyDays(ranked[0]) : 0
+  const atTop = ranked.filter((f) => anyDays(f) === top).length
   const open = days.some((d) => d.date >= from && d.open > 0)
   return (
     <>
@@ -310,6 +328,11 @@ function StreamingRows({ days, index, from }: { days: SideProjection['days']; in
                 { value: 'b2b', label: 'Back-to-backs' },
               ]}
             />
+            {top > 0 ? (
+              <span className="text-[12.5px] text-chalk-3" data-testid="streaming-count">
+                {atTop} {atTop === 1 ? 'team' : 'teams'} at +{top}
+              </span>
+            ) : null}
           </div>
         </td>
       </tr>
@@ -338,7 +361,8 @@ function StreamingRows({ days, index, from }: { days: SideProjection['days']; in
               </td>
               {days.map((d) => {
                 const game = index.gameOf.get(d.date)?.get(f.team)
-                const past = d.date < from
+                const underway = d.date === from && !!started?.has(f.team)
+                const past = d.date < from || underway
                 const helps = fitOn.has(d.date)
                 const only = fitOn.get(d.date)
                 const open = helps && !past
@@ -351,7 +375,7 @@ function StreamingRows({ days, index, from }: { days: SideProjection['days']; in
                   )
                 return (
                   <td key={d.date} className={cn('border-t border-seam px-1 py-1', past && 'opacity-45')}>
-                    <Tip content={past ? 'Already played' : !helps ? 'You have no open seat this night' : only ? `Only a ${only.join('/')} adds a start this night` : `Open seat — any position starts${b2b ? ' (back-to-back)' : ''}`}>
+                    <Tip content={underway ? 'Already started' : past ? 'Already played' : !helps ? 'You have no open seat this night' : only ? `Only a ${only.join('/')} adds a start this night` : `Open seat — any position starts${b2b ? ' (back-to-back)' : ''}`}>
                       <div
                         className={cn(
                           'block w-full rounded-md border px-1.5 py-1 text-left leading-tight',
@@ -369,6 +393,15 @@ function StreamingRows({ days, index, from }: { days: SideProjection['days']; in
           )
         })
       )}
+      {listed.length > STREAM_ROWS ? (
+        <tr>
+          <td colSpan={days.length + 1} className="border-t border-seam py-1.5">
+            <Button variant="ghost" size="xs" onClick={() => setAll(!all)} data-testid="streaming-all">
+              {all ? `Show top ${STREAM_ROWS}` : `Show all ${listed.length} teams`}
+            </Button>
+          </td>
+        </tr>
+      ) : null}
     </>
   )
 }

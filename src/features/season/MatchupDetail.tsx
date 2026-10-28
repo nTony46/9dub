@@ -226,6 +226,7 @@ export function MatchupDetail({
             engine={engine}
             index={index}
             from={from}
+            started={live?.fromDate === from ? live.started : undefined}
           />
         ) : (
           <>

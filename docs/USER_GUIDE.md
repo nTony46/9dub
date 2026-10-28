@@ -78,7 +78,7 @@ Each week shows:
 - **Projected score** (e.g. 5–4), with each category's totals and a call: *toss-up*, *lean* or *clear*. Weeks ESPN has scored show the **final** score and margins instead.
 - **Outlook** per category (safe → far behind), and where you're not winning, **Chase** or **Let go**: whether one free-agent pickup for the rest of the week clearly helps.
 - **Pickups this week:** the free agents that move the most categories, with the player you'd drop. *Try* loads one into the trade lab.
-- **Week view:** a lineup calendar with one row per slot and one column per day. It shows both teams' games that count, day by day and for the week, plus who plays, who sits on a crowded night, who is out and how many seats stay empty. **Fill the empty seats** ranks NBA teams by how many of your open nights they play, with a back-to-back filter.
+- **Week view:** a lineup calendar with one row per slot and one column per day. It shows both teams' games that count, day by day and for the week, plus who plays, who sits on a crowded night, who is out and how many seats stay empty. **Fill the empty seats** ranks NBA teams by how many of your open nights they play, with a back-to-back filter. It shows the top 8 (*Show all* lists every team), and today's games that had started at the last ESPN sync no longer count.
 - **Day by slot:** both lineups for one day, set automatically like ESPN's Quick Lineup.
 - **Trade lab:** give some of your players, get anyone, and see this week's score and your rest-of-season record before and after. **Record in Rosters** turns it into roster moves.
 - **Your schedule:** every week's final or projected score, plus your record and place in the standings.

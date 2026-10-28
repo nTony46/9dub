@@ -97,6 +97,13 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(grid).toContainText('8 open') // 2 of my players play each day → 8 of 10 seats open
   await expect(grid).toContainText('UTIL') // rows by fantasy slot, like the day view
   await expect(page.getByTestId('stream-team').first()).toContainText('+7')
+  await expect(page.getByTestId('streaming-count')).toContainText('at +7')
+  // Top 8 teams first; "Show all" lists every team with a game on an open night.
+  await expect(page.getByTestId('stream-team')).toHaveCount(8)
+  await page.getByTestId('streaming-all').click()
+  expect(await page.getByTestId('stream-team').count()).toBeGreaterThan(8)
+  await page.getByTestId('streaming-all').click()
+  await expect(page.getByTestId('stream-team')).toHaveCount(8)
   await page.getByRole('radio', { name: 'Back-to-backs' }).click()
   await expect(page.getByTestId('stream-team').first()).toContainText('B2B')
 
