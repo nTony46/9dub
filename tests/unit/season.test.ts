@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateDemoDataset } from '@/data/demo/generate'
+import type { NbaSchedule } from '@/data/schedule'
+import { projectWeek } from '@/features/season/model'
 import { NineDubDB, setDb } from '@/store/db'
 import { defaultPersisted, useApp } from '@/store/appStore'
+import { getEngine } from '@/store/derived'
 import { applyIdRemap, referencedIds } from '@/store/remap'
 import { activeInjuries, applyTrade, currentRosters, currentWeek, irPlacement, matchupsFromSeed, syncedTeamNames } from '@/store/season'
 import { migrateState, type LeagueSeed, type RosterMove } from '@/store/schema'
@@ -223,5 +226,30 @@ describe('team names follow the opponent mapping', () => {
   it('resets a slot whose league name moved elsewhere, and changes nothing when already in sync', () => {
     expect(syncedTeamNames(['Night Shift', 'Team 2', 'Night Shift'], [wk('Night Shift', 2)], null)).toEqual(['Team 1', 'Team 2', 'Night Shift'])
     expect(syncedTeamNames(['Team 1', 'Team 2', 'Night Shift'], [wk('Night Shift', 2)], null)).toBeNull()
+  })
+})
+
+describe('weekly lineup: a pickup with no projection', () => {
+  const demo = generateDemoDataset({ count: 120 })
+  beforeEach(async () => {
+    setDb(new NineDubDB(`standin-${Math.random()}`))
+    useApp.setState({ ...defaultPersisted(), hydrated: false, dataset: null, datasets: [], undoStack: [], previewId: null, compareIds: [], nbaSchedule: null })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({ json: async () => (String(url).endsWith('manifest.json') ? { datasets: [{ file: 'demo.json', default: true }] } : demo) })),
+    )
+    await useApp.getState().hydrate()
+  })
+
+  it('takes an open seat on his game nights and counts at replacement level', () => {
+    const engine = getEngine(useApp.getState())!
+    const base = engine.players.find((p) => p.team && p.line)!
+    const engineWith = { ...engine, byId: new Map(engine.byId).set('pickup', { ...base, id: 'pickup', name: 'Fresh Pickup', line: null }) }
+    const day = '2026-11-03'
+    const index = { schedule: { tbdWindow: null } as unknown as NbaSchedule, byDate: new Map([[day, new Set([base.team!])]]) }
+    const week = projectWeek(engineWith, index, ['pickup'], [], day, day, { availability: false })
+    expect(week.me.days[0].started).toEqual(['pickup'])
+    expect(week.me.starts).toBe(1)
+    expect(week.me.totals.pts).toBeCloseTo(engine.valuation.replacement.line.pts, 6)
   })
 })

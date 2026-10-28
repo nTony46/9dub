@@ -225,7 +225,7 @@ export function WeekGrid({
                               <div>{game ? `${game}` : 'No game'} · {w?.games ?? 0} game{w?.games === 1 ? '' : 's'} this week</div>
                               {state === 'sits' ? <div className="text-warn">Has a game, but every seat he fits is taken.</div> : null}
                               {state === 'out' ? <div className="text-bad">Marked out.</div> : null}
-                              {game && !p?.line ? <div>No projection — not counted.</div> : null}
+                              {game && !p?.line ? <div>No projection in your data: counts at replacement level.</div> : null}
                             </div>
                           }
                         >

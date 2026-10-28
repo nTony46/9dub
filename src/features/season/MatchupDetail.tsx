@@ -21,6 +21,8 @@ import { chasePlan, dayLabel, liveFor, opponentName, projectWeek, rangeText, typ
 const pct3 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(3).replace(/^0/, ''))
 const n1 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(1))
 const fmtCat = (c: Category, v: number | null) => (c === 'FG' || c === 'FT' ? pct3(v) : n1(v))
+/** ESPN's totals so far are whole counts. */
+const fmtNow = (c: Category, v: number | null) => (c === 'FG' || c === 'FT' ? pct3(v) : v == null ? '—' : String(Math.round(v)))
 const catHead = (c: Category) => (c === 'FG' ? 'FG%' : c === 'FT' ? 'FT%' : c)
 const catValue = (t: Totals, c: Category): number | null =>
   c === 'FG' ? t.fgPct : c === 'FT' ? t.ftPct : t[({ '3PM': 'tpm', PTS: 'pts', REB: 'reb', AST: 'ast', STL: 'stl', BLK: 'blk', TO: 'tov' } as const)[c]]
@@ -62,6 +64,7 @@ export function MatchupDetail({
   )
   const [dayIdx, setDayIdx] = useState(() => Math.max(0, proj.dates.indexOf(today)))
   const [view, setView] = useState<'week' | 'day'>('week')
+  const [show, setShow] = useState<'projected' | 'current'>('projected')
   const from = today > week.start ? today : week.start
 
   const tradeActive = trade.give.length + trade.get.length > 0
@@ -95,6 +98,7 @@ export function MatchupDetail({
   const oppLabel = opp == null ? 'No opponent' : opp === week.opponent ? opponentName(settings, week) : teamLabel(settings, opp)
   const myName = teamLabel(settings, me)
   const started = proj.live && (proj.live.me.fga + proj.live.me.pts + proj.live.them.fga + proj.live.them.pts > 0)
+  const current = show === 'current' && !!started
 
   return (
     <section className="rounded-lg border border-seam bg-floor" data-testid="matchup-detail">
@@ -105,7 +109,7 @@ export function MatchupDetail({
         <div className="ml-auto flex items-start gap-6 text-right">
           {started && proj.live ? (
             <Tip content={`ESPN totals as of ${new Date(proj.live.asOf).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`}>
-              <div data-testid="live-score">
+              <div data-testid="live-score" className={cn(!current && 'opacity-50')}>
                 <div className="label-caps">Now</div>
                 <div className={cn('font-display text-[44px] font-bold leading-none tracking-tight tnum', scoreTone(proj.live.now))}>{scoreText(proj.live.now)}</div>
               </div>
@@ -121,7 +125,7 @@ export function MatchupDetail({
           ) : null}
           <div>
             <div className="label-caps">Projected</div>
-            <div className={cn('font-display text-[44px] font-bold leading-none tracking-tight tnum', scoreTone(call), projT && 'opacity-50')} data-testid="matchup-score">
+            <div className={cn('font-display text-[44px] font-bold leading-none tracking-tight tnum', scoreTone(call), (projT || current) && 'opacity-50')} data-testid="matchup-score">
               {scoreText(call)}
             </div>
           </div>
@@ -148,10 +152,23 @@ export function MatchupDetail({
             <span>Expect missed games</span>
           </Tip>
         </div>
+        {started ? (
+          <Segmented<'projected' | 'current'>
+            className="ml-auto"
+            label="Category totals"
+            size="xs"
+            value={show}
+            onChange={setShow}
+            options={[
+              { value: 'projected', label: 'Projected' },
+              { value: 'current', label: 'Current' },
+            ]}
+          />
+        ) : null}
       </div>
 
       <div className="mt-3 overflow-x-auto px-5 pb-2">
-        <CategoryTable proj={proj} myName={myName} oppName={oppLabel} plan={plan} name={(id) => engine.byId.get(id)?.name ?? id} />
+        <CategoryTable proj={proj} current={current} myName={myName} oppName={oppLabel} plan={plan} name={(id) => engine.byId.get(id)?.name ?? id} />
       </div>
 
       {plan ? (
@@ -357,17 +374,43 @@ function OutlookTip({ c, plan, name }: { c: CategoryCall; plan: ChasePlan | null
   )
 }
 
-function CategoryTable({ proj, myName, oppName, plan, name }: { proj: WeekProjection; myName: string; oppName: string; plan: ChasePlan | null; name: (id: string) => string }) {
+/**
+ * Both sides' category totals and calls. Projected (default): the week's projected final.
+ * Current: ESPN's totals so far and who leads each category right now.
+ */
+function CategoryTable({
+  proj,
+  current,
+  myName,
+  oppName,
+  plan,
+  name,
+}: {
+  proj: WeekProjection
+  current: boolean
+  myName: string
+  oppName: string
+  plan: ChasePlan | null
+  name: (id: string) => string
+}) {
   const { call, me, them } = proj
+  const live = current ? proj.live : null
+  const shown = live ? live.now : call
   return (
-    <table className="w-full min-w-[720px] border-separate border-spacing-0 text-[14px]" data-testid="matchup-categories">
+    <table className="w-full min-w-[720px] border-separate border-spacing-0 text-[14px]" data-testid="matchup-categories" data-mode={live ? 'current' : 'projected'}>
       <thead>
         <tr className="text-[12.5px] text-chalk-3">
           <th className="h-9 border-b border-seam-strong pr-3 text-left font-medium">Team</th>
           <th className="border-b border-seam-strong px-2 text-right font-medium">
-            <Tip content="Games in a starting slot over the week. Hover a day below for benched games.">
-              <span>Starts</span>
-            </Tip>
+            {live ? (
+              <Tip content="Games still to play in a starting slot, from today's rosters.">
+                <span>Left</span>
+              </Tip>
+            ) : (
+              <Tip content="Games in a starting slot over the week. Hover a day below for benched games.">
+                <span>Starts</span>
+              </Tip>
+            )}
           </th>
           {CATEGORIES.map((c) => (
             <th key={c} className="border-b border-seam-strong px-2 text-right font-display text-[14px] font-semibold tracking-wide text-chalk-2">
@@ -384,8 +427,8 @@ function CategoryTable({ proj, myName, oppName, plan, name }: { proj: WeekProjec
           return (
             <tr key={side}>
               <td className={cn('h-11 max-w-[170px] truncate border-b border-seam pr-3 font-medium', side === 'mine' ? 'text-clock' : 'text-chalk')}>{side === 'mine' ? myName : oppName}</td>
-              <td className="whitespace-nowrap border-b border-seam px-2 text-right font-mono text-[13px] tnum text-chalk-2">{s.starts}</td>
-              {call.calls.map((c) => {
+              <td className="whitespace-nowrap border-b border-seam px-2 text-right font-mono text-[13px] tnum text-chalk-2">{live ? live.left[side === 'mine' ? 'me' : 'them'] : s.starts}</td>
+              {shown.calls.map((c, i) => {
                 const won = c.winner === (side === 'mine' ? 'me' : 'them')
                 const now = proj.live ? catValue(side === 'mine' ? proj.live.me : proj.live.them, c.cat) : null
                 return (
@@ -394,8 +437,8 @@ function CategoryTable({ proj, myName, oppName, plan, name }: { proj: WeekProjec
                     className={cn('border-b border-seam px-2 text-right font-mono tnum', won ? 'font-semibold text-chalk' : 'text-chalk-2', won && (side === 'mine' ? 'bg-plus/12' : 'bg-minus/12'))}
                   >
                     {proj.live ? (
-                      <Tip content={`So far ${fmtCat(c.cat, now)} (ESPN) · projected final ${fmtCat(c.cat, c[side])}`}>
-                        <span>{fmtCat(c.cat, c[side])}</span>
+                      <Tip content={live ? `Projected final ${fmtCat(c.cat, call.calls[i][side])}` : `So far ${fmtCat(c.cat, now)} (ESPN) · projected final ${fmtCat(c.cat, c[side])}`}>
+                        <span>{(live ? fmtNow : fmtCat)(c.cat, c[side])}</span>
                       </Tip>
                     ) : (
                       fmtCat(c.cat, c[side])
@@ -406,7 +449,7 @@ function CategoryTable({ proj, myName, oppName, plan, name }: { proj: WeekProjec
             </tr>
           )
         })}
-        <tr>
+        <tr className={cn(live && 'hidden')}>
           <td className="pr-3 pt-2.5 align-top text-[12.5px] text-chalk-3">Outlook</td>
           <td />
           {call.calls.map((c) => {
@@ -587,7 +630,7 @@ function LineupCard({
     ...day.bench.map((id) =>
       benched.has(id)
         ? { id, note: 'game · lineup full', tone: 'text-warn' }
-        : { id, note: engine.byId.get(id)?.line ? 'no game' : 'no projection', tone: 'text-chalk-4' },
+        : { id, note: 'no game', tone: 'text-chalk-4' },
     ),
     ...day.out.filter((id) => !onIr.has(id)).map((id) => ({ id, note: 'out · IR full', tone: 'text-bad' })),
   ]
@@ -606,6 +649,11 @@ function LineupCard({
               {p.name}
             </button>
             <Positions positions={p.positions} className="hidden shrink-0 text-[11px] sm:inline" />
+            {!p.line ? (
+              <Tip content="No projection in your data: counts at replacement level.">
+                <span className="shrink-0 text-[11px] text-chalk-4">repl.</span>
+              </Tip>
+            ) : null}
             <span className={cn('ml-auto shrink-0 font-mono text-[12.5px] tnum', tone ?? 'text-chalk-2')}>{note ?? (p.team ? (games?.get(p.team) ?? 'no game') : 'FA')}</span>
             <button
               type="button"
@@ -634,7 +682,7 @@ function LineupCard({
         </span>
       </div>
       <ul>
-        {day.lineup.map((s, i) => row(`s${i}`, s.playing || !s.id ? { slot: s.slot, id: s.id } : { slot: s.slot, id: s.id, note: engine.byId.get(s.id)?.line ? 'no game' : 'no projection', tone: 'text-chalk-4', dim: true }))}
+        {day.lineup.map((s, i) => row(`s${i}`, s.playing || !s.id ? { slot: s.slot, id: s.id } : { slot: s.slot, id: s.id, note: 'no game', tone: 'text-chalk-4', dim: true }))}
       </ul>
       <div className="mt-1 border-t border-seam-strong" />
       <ul>
@@ -934,7 +982,7 @@ function WeekTotals({
             </thead>
             <tbody>
               {rows.map(({ id, p, w }) => {
-                const l = p?.line
+                const l = p?.line ?? (p ? engine.valuation.replacement.line : null)
                 const a = opts.availability && p?.gp != null ? Math.min(1, p.gp / full) : 1
                 return (
                   <tr key={id} className="h-9 border-t border-seam">
@@ -945,7 +993,13 @@ function WeekTotals({
                         </button>
                         <span className="shrink-0 text-[12px] text-chalk-3">{p?.team ?? 'FA'}</span>
                         {w?.missed ? <Badge tone="bad">out {w.missed}g</Badge> : null}
-                        {!l ? <Badge tone="outline">no projection</Badge> : null}
+                        {p && !p.line ? (
+                          <Tip content="No projection in your data: counts at replacement level.">
+                            <span>
+                              <Badge tone="outline">no projection</Badge>
+                            </span>
+                          </Tip>
+                        ) : null}
                       </span>
                     </td>
                     <td className={cn('px-2 text-right font-mono tnum', w?.benched ? 'text-warn' : 'text-chalk-2')}>{w && l ? `${w.starts} / ${w.games}` : '—'}</td>

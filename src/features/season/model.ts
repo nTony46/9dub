@@ -54,6 +54,12 @@ export interface ProjectionOptions {
   slots?: readonly SlotDef[]
 }
 
+/**
+ * Rostered players as the weekly engine sees them. A player your data has no
+ * projection for (often a fresh waiver pickup) still plays his games: he takes
+ * a lineup seat like on ESPN and counts at replacement level, the same
+ * stand-in the draft engine uses for unprojected roster spots.
+ */
 export function matchupPlayers(ids: readonly string[], engine: EngineData, opts: ProjectionOptions): MatchupPlayer[] {
   const { valuation, ctx } = engine
   const full = valuation.settings.fullSeasonGames
@@ -66,7 +72,7 @@ export function matchupPlayers(ids: readonly string[], engine: EngineData, opts:
         id: p.id,
         nbaTeam: p.team,
         positions: p.positions,
-        line: p.line,
+        line: p.line ?? valuation.replacement.line,
         priority: v ? (ctx.basis === 'gpAware' ? v.rankGp : v.rank) : 9999,
         availability: opts.availability && p.gp != null ? Math.min(1, p.gp / full) : 1,
         outThrough: opts.injuries?.has(p.id) ? (opts.injuries.get(p.id) ?? null) : undefined,
@@ -82,8 +88,8 @@ export interface WeekProjection {
   call: WeekCall
   /** Days in the NBA's still-unscheduled window (NBA Cup knockout + make-up games). */
   tbdDays: string[]
-  /** The matchup in progress: ESPN's totals so far and the score they make right now. */
-  live: { me: WeekTotals; them: WeekTotals; now: WeekCall; asOf: string } | null
+  /** The matchup in progress: ESPN's totals so far, the score they make right now, and each side's starts still to play. */
+  live: { me: WeekTotals; them: WeekTotals; now: WeekCall; asOf: string; left: { me: number; them: number } } | null
 }
 
 /** ESPN's totals so far for the two sides of the matchup in progress. */
@@ -147,8 +153,10 @@ export function projectWeek(
     const teams = index.byDate.get(d)
     return d === live.fromDate && teams ? new Set([...teams].filter((t) => !live.started.has(t))) : teams
   }
-  const meRest = projectSide(mineP, rest, restPlaying, slots).totals
-  const themRest = projectSide(theirsP, rest, restPlaying, slots).totals
+  const meRestSide = projectSide(mineP, rest, restPlaying, slots)
+  const themRestSide = projectSide(theirsP, rest, restPlaying, slots)
+  const meRest = meRestSide.totals
+  const themRest = themRestSide.totals
   const meNow = live.me ?? weekTotals(ZERO)
   const themNow = live.them ?? weekTotals(ZERO)
   const meTotal = addTotals(meNow, meRest)
@@ -159,7 +167,7 @@ export function projectWeek(
     them: { ...them, totals: themTotal },
     call: compareWeek(meTotal, themTotal, { me: meRest, them: themRest }),
     tbdDays,
-    live: { me: meNow, them: themNow, now: compareWeek(meNow, themNow), asOf: live.asOf },
+    live: { me: meNow, them: themNow, now: compareWeek(meNow, themNow), asOf: live.asOf, left: { me: meRestSide.starts, them: themRestSide.starts } },
   }
 }
 
