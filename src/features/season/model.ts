@@ -6,10 +6,25 @@ import { addTotals, compareWeek, projectSide, weekTotals, type MatchupPlayer, ty
 import { ESPN_DEFAULT_SLOTS, fillLineup, type SlotDef } from '@/analytics/positions'
 import type { EspnResultSide } from '@/data/espn'
 import { addDays, datesBetween, teamsByDate, type NbaSchedule } from '@/data/schedule'
+import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useApp } from '@/store/appStore'
 import { teamLabel, useDraft, type EngineData, type PlayerInfo } from '@/store/derived'
 import { activeInjuries, currentRosters, todayIso, type CurrentRosters } from '@/store/season'
 import type { EspnSync, LeagueSettings, MatchupWeek } from '@/store/schema'
+
+/**
+ * Windows at least this wide dock the waiver wire in a column left of the
+ * matchup (room for it and a full-width week grid); narrower ones show it
+ * inline under the categories.
+ */
+export const WIRE_DOCK_QUERY = '(min-width: 1440px)'
+
+/** Where the waiver wire goes: hidden (turned off), docked beside the matchup, or inline. */
+export function useWirePlacement(): 'hidden' | 'dock' | 'inline' {
+  const open = useApp((s) => s.prefs.waiverWire)
+  const wide = useMediaQuery(WIRE_DOCK_QUERY)
+  return !open ? 'hidden' : wide ? 'dock' : 'inline'
+}
 
 /** Draft rosters + post-draft moves. */
 export function useCurrentRosters(): CurrentRosters {

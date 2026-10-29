@@ -1,13 +1,14 @@
-import { ArrowDown, ArrowRight, ArrowUp, Bandage, X } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { ArrowDown, ArrowRight, ArrowUp, Bandage, PanelLeftClose, UserPlus, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { CATEGORIES, CATEGORY_META, type Category } from '@/analytics/categories'
-import { chaseVerdict, defaultTargets, OUTLOOK_TEXT, outlookOf, pickupDeltas, targetFit, type Outlook } from '@/analytics/chase'
+import { chaseVerdict, defaultTargets, OUTLOOK_TEXT, outlookOf, pickupDeltas, targetFit, type Outlook, type PickupResult } from '@/analytics/chase'
 import { scoreText, weekTotals, type CategoryCall, type DaySlate, type SideProjection, type WeekCall, type WeekTotals as Totals } from '@/analytics/matchup'
 import { POSITIONS, type Position } from '@/analytics/positions'
 import { Positions } from '@/components/PlayerBits'
 import { Badge } from '@/components/ui/Badge'
-import { Button } from '@/components/ui/Button'
+import { Button, IconButton } from '@/components/ui/Button'
 import { Segmented, Select, Switch } from '@/components/ui/Controls'
 import { Tip } from '@/components/ui/Tooltip'
 import { cn } from '@/lib/cn'
@@ -18,7 +19,7 @@ import { applyTrade, irPlacement, todayIso, type TradeDraft } from '@/store/seas
 import type { EspnSync, MatchupWeek } from '@/store/schema'
 import { PlayerPicker } from './PlayerPicker'
 import { WeekGrid } from './WeekGrid'
-import { actualLine, chasePlan, dayLabel, lineSource, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
+import { actualLine, chasePlan, dayLabel, lineSource, useWirePlacement, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
 
 const pct3 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(3).replace(/^0/, ''))
 const n1 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(1))
@@ -42,6 +43,7 @@ export function MatchupDetail({
   me,
   opts,
   setOpts,
+  dock,
 }: {
   week: MatchupWeek
   weekNo: number
@@ -53,6 +55,8 @@ export function MatchupDetail({
   me: number
   opts: ProjectionOptions
   setOpts: (o: ProjectionOptions) => void
+  /** The docked waiver wire's column (null = the wire goes inline, or is off). */
+  dock: HTMLElement | null
 }) {
   const settings = useApp((s) => s.settings)
   const [opp, setOpp] = useState<number | null>(week.opponent)
@@ -106,6 +110,9 @@ export function MatchupDetail({
   const lineFor = useMemo(() => (id: string) => actualLine(espnStats?.[id])?.line ?? null, [espnStats])
   const [basis, setBasis] = useState<WireBasis>('projection')
   const [wireTeam, setWireTeam] = useState<string | null>(null)
+  const [wireView, setWireView] = useState<WireView>(WIRE_VIEW)
+  const placement = useWirePlacement()
+  const setPrefs = useApp((s) => s.setPrefs)
   const rank = (id: string) => {
     const v = engine.valuation.values.get(id)
     return v ? (engine.ctx.basis === 'gpAware' ? v.rankGp : v.rank) : 9999
@@ -131,6 +138,32 @@ export function MatchupDetail({
   const myName = teamLabel(settings, me)
   const started = proj.live && (proj.live.me.fga + proj.live.me.pts + proj.live.them.fga + proj.live.them.pts > 0)
   const current = show === 'current' && !!started
+
+  const wire = wirePlan ? (
+    <WaiverWire
+      plan={wirePlan}
+      engine={engine}
+      drop={drop}
+      dropOptions={needDrop ? dropOptions : []}
+      setDrop={setDropChoice}
+      onTry={(id) => {
+        setTrade({ give: drop ? [drop] : [], get: [id] })
+        setTimeout(() => document.querySelector('[data-testid="trade-lab"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+      }}
+      basis={basis}
+      setBasis={espnStats && Object.values(espnStats).some((s) => s.available) ? setBasis : null}
+      stats={espnStats && Object.keys(espnStats).length ? espnStats : undefined}
+      status={myStatus ? { rank: myStatus.waiverRank, teams: settings.teams, pickups: myStatus.pickups } : null}
+      team={wireTeam}
+      setTeam={setWireTeam}
+      view={wireView}
+      setView={setWireView}
+      docked={placement === 'dock'}
+      onHide={() => setPrefs({ waiverWire: false })}
+    />
+  ) : (
+    <p className={cn('text-[13px] text-chalk-3', placement === 'dock' ? 'p-4' : 'border-t border-seam px-5 py-4')}>No games left this week.</p>
+  )
 
   return (
     <section className="rounded-lg border border-seam bg-floor" data-testid="matchup-detail">
@@ -184,9 +217,20 @@ export function MatchupDetail({
             <span>Expect missed games</span>
           </Tip>
         </div>
+        <Button
+          size="xs"
+          variant={placement === 'hidden' ? 'ghost' : 'subtle'}
+          aria-pressed={placement !== 'hidden'}
+          title={placement === 'hidden' ? 'Show the waiver wire' : 'Hide the waiver wire'}
+          onClick={() => setPrefs({ waiverWire: placement === 'hidden' })}
+          className={cn('ml-auto', placement !== 'hidden' && 'border-clock-line text-clock')}
+          data-testid="wire-toggle"
+        >
+          <UserPlus size={13} />
+          Waiver wire
+        </Button>
         {started ? (
           <Segmented<'projected' | 'current'>
-            className="ml-auto"
             label="Category totals"
             size="xs"
             value={show}
@@ -203,25 +247,8 @@ export function MatchupDetail({
         <CategoryTable proj={proj} current={current} myName={myName} oppName={oppLabel} plan={plan} name={(id) => engine.byId.get(id)?.name ?? id} />
       </div>
 
-      {wirePlan ? (
-        <WaiverWire
-          plan={wirePlan}
-          engine={engine}
-          drop={drop}
-          dropOptions={needDrop ? dropOptions : []}
-          setDrop={setDropChoice}
-          onTry={(id) => {
-            setTrade({ give: drop ? [drop] : [], get: [id] })
-            setTimeout(() => document.querySelector('[data-testid="trade-lab"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
-          }}
-          basis={basis}
-          setBasis={espnStats && Object.values(espnStats).some((s) => s.available) ? setBasis : null}
-          stats={espnStats && Object.keys(espnStats).length ? espnStats : undefined}
-          status={myStatus ? { rank: myStatus.waiverRank, teams: settings.teams, pickups: myStatus.pickups } : null}
-          team={wireTeam}
-          setTeam={setWireTeam}
-        />
-      ) : null}
+      {placement === 'inline' ? wire : null}
+      {placement === 'dock' && dock ? createPortal(wire, dock) : null}
 
       <TradeLab
         engine={engine}
@@ -267,7 +294,9 @@ export function MatchupDetail({
             started={live?.fromDate === from ? live.started : undefined}
             onTeam={(t) => {
               setWireTeam(t)
-              document.getElementById('waiver-wire')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              setPrefs({ waiverWire: true })
+              // Inline, the list is up the page; docked, it's already beside the grid.
+              if (placement !== 'dock') setTimeout(() => document.getElementById('waiver-wire')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
             }}
           />
         ) : (
@@ -530,6 +559,16 @@ const OUTLOOK_RANK: Record<Outlook, number> = { 'far-behind': 0, behind: 1, 'tos
 
 type WireSort = 'fit' | 'games' | 'min' | Category
 type WireBasis = 'projection' | 'last15'
+/** The waiver wire's own settings, kept by the matchup so they survive moving between inline and docked. */
+interface WireView {
+  /** null = the default (every category still in play). */
+  targets: Category[] | null
+  sort: WireSort
+  pos: Position | ''
+  faOnly: boolean
+  all: boolean
+}
+const WIRE_VIEW: WireView = { targets: null, sort: 'fit', pos: '', faOnly: false, all: false }
 /** Rows shown before "Show all". */
 const WIRE_ROWS = 15
 
@@ -550,7 +589,8 @@ const clearsText = (iso: string, long = false) =>
  * The waiver wire for the rest of this week: every free agent and waiver
  * player, each tried in place of the drop. Pick the categories you're after;
  * a row shows the games he'd start for you (from the day his claim clears)
- * and what he adds to your week in each of them.
+ * and what he adds to your week in each of them. A full table where it fits,
+ * else two-line rows (a docked column, a half-width window).
  */
 function WaiverWire({
   plan,
@@ -565,6 +605,10 @@ function WaiverWire({
   status,
   team,
   setTeam,
+  view,
+  setView,
+  docked,
+  onHide,
 }: {
   plan: ChasePlan
   engine: EngineData
@@ -579,13 +623,25 @@ function WaiverWire({
   status: { rank: number | null; teams: number; pickups: number | null } | null
   team: string | null
   setTeam: (team: string | null) => void
+  view: WireView
+  setView: (v: WireView) => void
+  docked: boolean
+  onHide: () => void
 }) {
   const openPreview = useApp((s) => s.openPreview)
-  const [targets, setTargets] = useState<Category[]>(() => defaultTargets(plan.baseCall))
-  const [sort, setSort] = useState<WireSort>('fit')
-  const [pos, setPos] = useState<Position | ''>('')
-  const [faOnly, setFaOnly] = useState(false)
-  const [all, setAll] = useState(false)
+  const targets = view.targets ?? defaultTargets(plan.baseCall)
+  const { sort, pos, faOnly, all } = view
+  const set = (patch: Partial<WireView>) => setView({ ...view, ...patch })
+  // Measure the panel: the table needs room for a column per category; below that, two-line rows.
+  const boxRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(1200)
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   const [now] = useState(() => Date.now())
   const waiverOf = (id: string) => {
     const c = stats?.[id]?.waiverClears
@@ -598,6 +654,7 @@ function WaiverWire({
     return span && span.gp > 0 ? span.min / span.gp : (engine.byId.get(id)?.proj?.minutesPerGame ?? null)
   }
   const cols = CATEGORIES.filter((c) => targets.includes(c))
+  const compact = width < 520 + 52 * cols.length
   const sign = (c: Category) => (c === 'TO' ? -1 : 1)
   const rows = plan.options
     .filter((o) => {
@@ -608,23 +665,68 @@ function WaiverWire({
     .sort((a, b) => {
       if (sort === 'games') return b.o.starts - a.o.starts || b.fit - a.fit
       if (sort === 'min') return (b.min ?? -1) - (a.min ?? -1) || b.fit - a.fit
-      if (sort === 'fit') return b.fit - a.fit || b.o.starts - a.o.starts
+      if (sort === 'fit' || !targets.includes(sort)) return b.fit - a.fit || b.o.starts - a.o.starts
       return sign(sort) * ((b.d[sort] ?? 0) - (a.d[sort] ?? 0)) || b.fit - a.fit
     })
   const shown = all ? rows : rows.slice(0, WIRE_ROWS)
   const head = (key: WireSort, label: ReactNode, tip: string, align: 'left' | 'right' = 'right') => (
     <th key={key} className={cn('h-9 border-b border-seam-strong px-2 font-medium', align === 'right' ? 'text-right' : 'text-left')} aria-sort={sort === key ? 'descending' : undefined}>
       <Tip content={tip}>
-        <button type="button" onClick={() => setSort(key)} className={cn('inline-flex items-center gap-0.5 hover:text-chalk', sort === key ? 'text-chalk' : 'text-chalk-3')}>
+        <button type="button" onClick={() => set({ sort: key })} className={cn('inline-flex items-center gap-0.5 hover:text-chalk', sort === key ? 'text-chalk' : 'text-chalk-3')}>
           {label}
           {sort === key ? <ArrowDown size={11} /> : null}
         </button>
       </Tip>
     </th>
   )
-  const toggle = (c: Category) => setTargets((t) => (t.includes(c) ? t.filter((x) => x !== c) : [...t, c]))
+  const toggle = (c: Category) => set({ targets: targets.includes(c) ? targets.filter((x) => x !== c) : [...targets, c] })
+  const playerBits = (id: string) => {
+    const p = engine.byId.get(id)
+    return (
+      <span className="flex min-w-0 items-center gap-2" data-testid="wire-player">
+        <button type="button" onClick={() => openPreview(id)} className="min-w-0 truncate text-left font-medium hover:underline">
+          {p?.name ?? id}
+        </button>
+        <Positions positions={p?.positions ?? []} className="shrink-0 text-[11px]" />
+        <span className="shrink-0 font-mono text-[11.5px] text-chalk-3">{p?.team}</span>
+        {p && basis === 'projection' ? <SourceTag p={p} /> : null}
+      </span>
+    )
+  }
+  const waiverTag = (clears: string) => (
+    <Tip content={`On waivers until ${clearsText(clears, true)}. He counts only from then, and claims go by waiver priority.`}>
+      <span className="whitespace-nowrap text-warn">Waivers · {clearsText(clears)}</span>
+    </Tip>
+  )
+  const games = (o: PickupResult) => (
+    <span className="whitespace-nowrap">
+      <span className="font-mono font-semibold tnum" data-testid="wire-games">
+        {o.starts}
+      </span>{' '}
+      <span className="text-[11.5px] text-chalk-3">{o.days.map((x) => dayLabel(x).dow).join(' ')}</span>
+    </span>
+  )
+  const changes = (o: PickupResult) =>
+    CATEGORIES.map((cat, i) => ({ cat, from: outlookOf(plan.baseCall.calls[i]), to: outlookOf(o.call.calls[i]) }))
+      .filter((m): m is { cat: Category; from: Outlook; to: Outlook } => m.from != null && m.to != null && m.from !== m.to)
+      .map((m) => {
+        const up = OUTLOOK_RANK[m.to] > OUTLOOK_RANK[m.from]
+        return (
+          <Tip key={m.cat} content={`${catHead(m.cat)}: ${OUTLOOK_TEXT[m.from]} → ${OUTLOOK_TEXT[m.to]}`}>
+            <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono text-[11.5px] font-semibold', up ? 'bg-plus/12 text-plus' : 'bg-minus/12 text-minus')}>
+              {catHead(m.cat)}
+              {up ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+            </span>
+          </Tip>
+        )
+      })
+  const tryButton = (id: string) => (
+    <Button size="xs" variant="subtle" onClick={() => onTry(id)}>
+      Try
+    </Button>
+  )
   return (
-    <div className="border-t border-seam px-5 py-4" data-testid="waiver-wire" id="waiver-wire">
+    <div ref={boxRef} className={cn(docked ? 'p-4' : 'border-t border-seam px-5 py-4')} data-testid="waiver-wire" id="waiver-wire" data-layout={compact ? 'rows' : 'table'}>
       <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <Tip content="Free agents and players on waivers as of your last ESPN sync, each tried for the rest of this week in place of the player you'd drop. Games count only on nights he'd start for you, from the day his waiver claim clears.">
           <h3 className="label-caps">Waiver wire</h3>
@@ -636,18 +738,23 @@ function WaiverWire({
             {status.pickups != null ? `${status.pickups} pickup${status.pickups === 1 ? '' : 's'} this week` : null}
           </span>
         ) : null}
-        {dropOptions.length ? (
-          <label className="ml-auto flex items-center gap-2 text-[12.5px] text-chalk-3">
-            Dropping
-            <Select value={drop ?? ''} onChange={(e) => setDrop(e.target.value || null)} className="h-7 w-[210px] text-[12.5px]" aria-label="Player to drop">
-              {dropOptions.map((id) => (
-                <option key={id} value={id}>
-                  {engine.byId.get(id)?.name ?? id}
-                </option>
-              ))}
-            </Select>
-          </label>
-        ) : null}
+        <span className="ml-auto flex items-center gap-2">
+          {dropOptions.length ? (
+            <label className="flex items-center gap-2 text-[12.5px] text-chalk-3">
+              Dropping
+              <Select value={drop ?? ''} onChange={(e) => setDrop(e.target.value || null)} className="h-7 w-[190px] text-[12.5px]" aria-label="Player to drop">
+                {dropOptions.map((id) => (
+                  <option key={id} value={id}>
+                    {engine.byId.get(id)?.name ?? id}
+                  </option>
+                ))}
+              </Select>
+            </label>
+          ) : null}
+          <IconButton label="Hide the waiver wire" size="xs" onClick={onHide} data-testid="wire-hide">
+            {docked ? <PanelLeftClose size={14} /> : <X size={14} />}
+          </IconButton>
+        </span>
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Categories you’re after">
@@ -669,7 +776,7 @@ function WaiverWire({
             </button>
           ))}
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2', !compact && 'ml-auto')}>
           {setBasis ? (
             <Tip content="Projection: each player's projected line (or his estimate from ESPN stats). Last 15 days: what he has actually done lately, per game (this season when he has fewer than two games in that span).">
               <span>
@@ -686,7 +793,7 @@ function WaiverWire({
               </span>
             </Tip>
           ) : null}
-          <Select value={pos} onChange={(e) => setPos(e.target.value as Position | '')} className="h-7 w-[136px] text-[12.5px]" aria-label="Position">
+          <Select value={pos} onChange={(e) => set({ pos: e.target.value as Position | '' })} className="h-7 w-[136px] text-[12.5px]" aria-label="Position">
             <option value="">All positions</option>
             {POSITIONS.map((p) => (
               <option key={p} value={p}>
@@ -694,9 +801,21 @@ function WaiverWire({
               </option>
             ))}
           </Select>
+          {compact ? (
+            <Select value={sort} onChange={(e) => set({ sort: e.target.value as WireSort })} className="h-7 w-[150px] text-[12.5px]" aria-label="Sort by">
+              <option value="fit">Best fit</option>
+              <option value="games">Most games</option>
+              <option value="min">Most minutes</option>
+              {cols.map((c) => (
+                <option key={c} value={c}>
+                  {c === 'TO' ? 'Fewest turnovers' : `Most ${catHead(c)}`}
+                </option>
+              ))}
+            </Select>
+          ) : null}
           {anyWaivers ? (
             <span className="flex items-center gap-2 text-[12.5px] text-chalk-2">
-              <Switch checked={faOnly} onChange={setFaOnly} label="Free agents only" />
+              <Switch checked={faOnly} onChange={(v) => set({ faOnly: v })} label="Free agents only" />
               Free agents only
             </span>
           ) : null}
@@ -708,94 +827,77 @@ function WaiverWire({
           ) : null}
         </div>
       </div>
-      {rows.length ? (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-separate border-spacing-0 text-[13.5px]">
-            <thead>
-              <tr className="text-[12.5px]">
-                {head('fit', 'Player', 'Sort by how much he adds to the categories you picked', 'left')}
-                {stats ? <th className="h-9 border-b border-seam-strong px-2 text-left font-medium text-chalk-3">Status</th> : null}
-                {head('games', 'Games', 'Games he would start for you, from the day he can play')}
-                {head('min', 'MIN', basis === 'last15' ? 'Minutes per game, last 15 days' : 'Minutes per game this season (ESPN), else projected')}
-                {cols.map((c) => head(c, catHead(c), `What he adds to your week in ${CATEGORY_META[c].name}${c === 'TO' ? ' (fewer is better)' : ''}, after the drop`))}
-                <th className="h-9 border-b border-seam-strong px-2 text-right font-medium text-chalk-3">Changes</th>
-                <th className="h-9 border-b border-seam-strong" />
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map(({ o, d, min }) => {
-                const p = engine.byId.get(o.id)
-                const clears = waiverOf(o.id)
-                const moves = CATEGORIES.map((cat, i) => ({ cat, from: outlookOf(plan.baseCall.calls[i]), to: outlookOf(o.call.calls[i]) })).filter(
-                  (m): m is { cat: Category; from: Outlook; to: Outlook } => m.from != null && m.to != null && m.from !== m.to,
-                )
-                return (
-                  <tr key={o.id} data-testid="wire-row">
-                    <td className="h-10 max-w-[260px] border-b border-seam pr-2">
-                      <span className="flex min-w-0 items-center gap-2">
-                        <button type="button" onClick={() => openPreview(o.id)} className="min-w-0 truncate text-left font-medium hover:underline">
-                          {p?.name ?? o.id}
-                        </button>
-                        <Positions positions={p?.positions ?? []} className="shrink-0 text-[11px]" />
-                        <span className="shrink-0 font-mono text-[11.5px] text-chalk-3">{p?.team}</span>
-                        {p && basis === 'projection' ? <SourceTag p={p} /> : null}
-                      </span>
-                    </td>
-                    {stats ? (
-                      <td className="border-b border-seam px-2 text-[12.5px]">
-                        {clears ? (
-                          <Tip content={`On waivers until ${clearsText(clears, true)}. He counts only from then, and claims go by waiver priority.`}>
-                            <span className="whitespace-nowrap text-warn">Waivers · {clearsText(clears)}</span>
-                          </Tip>
-                        ) : (
-                          <span className="text-chalk-3">FA</span>
-                        )}
-                      </td>
-                    ) : null}
-                    <td className="whitespace-nowrap border-b border-seam px-2 text-right">
-                      <span className="font-mono font-semibold tnum">{o.starts}</span>{' '}
-                      <span className="whitespace-nowrap text-[11.5px] text-chalk-3">{o.days.map((x) => dayLabel(x).dow).join(' ')}</span>
-                    </td>
-                    <td className="border-b border-seam px-2 text-right font-mono tnum text-chalk-2">{min != null ? min.toFixed(1) : '–'}</td>
-                    {cols.map((c) => (
-                      <td key={c} className={cn('border-b border-seam px-2 text-right font-mono tnum', deltaTone(c, d[c]))}>
-                        {fmtDelta(c, d[c])}
-                      </td>
-                    ))}
-                    <td className="min-w-[124px] border-b border-seam px-2 py-1 text-right">
-                      <span className="inline-flex flex-wrap justify-end gap-1">
-                        {moves.map((m) => {
-                          const up = OUTLOOK_RANK[m.to] > OUTLOOK_RANK[m.from]
-                          return (
-                            <Tip key={m.cat} content={`${catHead(m.cat)}: ${OUTLOOK_TEXT[m.from]} → ${OUTLOOK_TEXT[m.to]}`}>
-                              <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono text-[11.5px] font-semibold', up ? 'bg-plus/12 text-plus' : 'bg-minus/12 text-minus')}>
-                                {catHead(m.cat)}
-                                {up ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
-                              </span>
-                            </Tip>
-                          )
-                        })}
-                      </span>
-                    </td>
-                    <td className="border-b border-seam pl-2 text-right">
-                      <Button size="xs" variant="subtle" onClick={() => onTry(o.id)}>
-                        Try
-                      </Button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {rows.length > WIRE_ROWS ? (
-            <Button variant="ghost" size="xs" className="mt-1.5" onClick={() => setAll(!all)} data-testid="wire-all">
-              {all ? `Show top ${WIRE_ROWS}` : `Show all ${rows.length}`}
-            </Button>
-          ) : null}
-        </div>
-      ) : (
+      {!rows.length ? (
         <p className="text-[13px] text-chalk-3">{plan.options.length ? 'Nobody matches these filters.' : 'No free agent adds a start this week.'}</p>
+      ) : compact ? (
+        <ul>
+          {shown.map(({ o, d, min }) => {
+            const clears = waiverOf(o.id)
+            return (
+              <li key={o.id} className="border-t border-seam py-2 first:border-t-0" data-testid="wire-row">
+                <div className="flex items-center gap-2 text-[13.5px]">
+                  {playerBits(o.id)}
+                  <span className="ml-auto flex shrink-0 items-center gap-2.5">
+                    {games(o)}
+                    {tryButton(o.id)}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
+                  {clears ? waiverTag(clears) : null}
+                  {cols.map((c) => (
+                    <span key={c} className="whitespace-nowrap font-mono tnum" data-testid={`wire-${c}`}>
+                      <span className="text-chalk-3">{catHead(c)}</span> <span className={deltaTone(c, d[c])}>{fmtDelta(c, d[c])}</span>
+                    </span>
+                  ))}
+                  <span className="whitespace-nowrap font-mono tnum text-chalk-3">{min != null ? `${min.toFixed(1)} min` : null}</span>
+                  <span className="ml-auto inline-flex flex-wrap justify-end gap-1">{changes(o)}</span>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <table className="w-full border-separate border-spacing-0 text-[13.5px]">
+          <thead>
+            <tr className="text-[12.5px]">
+              {head('fit', 'Player', 'Sort by how much he adds to the categories you picked', 'left')}
+              {stats ? <th className="h-9 border-b border-seam-strong px-2 text-left font-medium text-chalk-3">Status</th> : null}
+              {head('games', 'Games', 'Games he would start for you, from the day he can play')}
+              {head('min', 'MIN', basis === 'last15' ? 'Minutes per game, last 15 days' : 'Minutes per game this season (ESPN), else projected')}
+              {cols.map((c) => head(c, catHead(c), `What he adds to your week in ${CATEGORY_META[c].name}${c === 'TO' ? ' (fewer is better)' : ''}, after the drop`))}
+              <th className="h-9 border-b border-seam-strong px-2 text-right font-medium text-chalk-3">Changes</th>
+              <th className="h-9 border-b border-seam-strong" />
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map(({ o, d, min }) => {
+              const clears = waiverOf(o.id)
+              return (
+                <tr key={o.id} data-testid="wire-row">
+                  <td className="h-10 max-w-[260px] border-b border-seam pr-2">{playerBits(o.id)}</td>
+                  {stats ? <td className="border-b border-seam px-2 text-[12.5px]">{clears ? waiverTag(clears) : <span className="text-chalk-3">FA</span>}</td> : null}
+                  <td className="border-b border-seam px-2 text-right">{games(o)}</td>
+                  <td className="border-b border-seam px-2 text-right font-mono tnum text-chalk-2">{min != null ? min.toFixed(1) : '–'}</td>
+                  {cols.map((c) => (
+                    <td key={c} className={cn('border-b border-seam px-2 text-right font-mono tnum', deltaTone(c, d[c]))} data-testid={`wire-${c}`}>
+                      {fmtDelta(c, d[c])}
+                    </td>
+                  ))}
+                  <td className="min-w-[124px] border-b border-seam px-2 py-1 text-right">
+                    <span className="inline-flex flex-wrap justify-end gap-1">{changes(o)}</span>
+                  </td>
+                  <td className="border-b border-seam pl-2 text-right">{tryButton(o.id)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
       )}
+      {rows.length > WIRE_ROWS ? (
+        <Button variant="ghost" size="xs" className="mt-1.5" onClick={() => set({ all: !all })} data-testid="wire-all">
+          {all ? `Show top ${WIRE_ROWS}` : `Show all ${rows.length}`}
+        </Button>
+      ) : null}
     </div>
   )
 }

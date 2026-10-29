@@ -88,15 +88,33 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(wire.getByTestId('wire-row').first()).toBeVisible()
   // Pick the categories: one column each.
   const reb = wire.getByRole('group', { name: 'Categories you’re after' }).getByRole('button', { name: 'REB', exact: true })
-  const wasOn = (await reb.getAttribute('aria-pressed')) === 'true'
+  const rebValue = wire.getByTestId('wire-row').first().getByTestId('wire-REB')
+  if ((await reb.getAttribute('aria-pressed')) === 'true') await reb.click()
+  await expect(reb).toHaveAttribute('aria-pressed', 'false')
+  await expect(rebValue).toHaveCount(0)
   await reb.click()
-  await expect(reb).toHaveAttribute('aria-pressed', wasOn ? 'false' : 'true')
-  const rebColumn = wire.locator('thead').getByRole('button', { name: 'REB', exact: true })
-  await expect(rebColumn).toHaveCount(wasOn ? 0 : 1)
-  // Sort by games: most starts first.
-  await wire.getByRole('button', { name: 'Games' }).click()
-  const games = await wire.getByTestId('wire-row').locator('td:nth-child(2) span.font-mono').allInnerTexts()
+  await expect(reb).toHaveAttribute('aria-pressed', 'true')
+  await expect(rebValue).toHaveCount(1)
+  // Sort by games: most starts first (a column header in the table, a menu in the two-line layout).
+  if ((await wire.getAttribute('data-layout')) === 'table') await wire.getByRole('button', { name: 'Games' }).click()
+  else await wire.getByLabel('Sort by').selectOption('games')
+  const games = await wire.getByTestId('wire-games').allInnerTexts()
   expect(games.map(Number)).toEqual([...games.map(Number)].sort((a, b) => b - a))
+  // A toggle shows or hides it, and the choice is remembered.
+  await page.getByTestId('wire-toggle').click()
+  await expect(wire).toHaveCount(0)
+  await expect(page.getByTestId('wire-toggle')).toHaveAttribute('aria-pressed', 'false')
+  await page.getByTestId('wire-toggle').click()
+  await expect(wire.getByTestId('wire-row').first()).toBeVisible()
+  // On a wide window it docks in its own column beside the matchup, and the hide button closes it.
+  await page.setViewportSize({ width: 1600, height: 900 })
+  await expect(page.getByTestId('wire-dock').getByTestId('waiver-wire')).toBeVisible()
+  await page.getByTestId('wire-hide').click()
+  await expect(page.getByTestId('wire-dock')).toHaveCount(0)
+  await page.getByTestId('wire-toggle').click()
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await expect(page.getByTestId('wire-dock')).toHaveCount(0)
+  await expect(wire).toBeVisible()
 
   // Week view (default): players × days, open seats, and NBA teams to stream from.
   const grid = page.getByTestId('week-grid')
@@ -123,7 +141,7 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   const code = (await streamTeam.innerText()).trim()
   await streamTeam.click()
   await expect(wire.getByTestId('wire-team')).toHaveText(code)
-  for (const row of await wire.getByTestId('wire-row').all()) await expect(row.locator('td').first()).toContainText(code)
+  for (const row of await wire.getByTestId('wire-row').all()) await expect(row.getByTestId('wire-player')).toContainText(code)
   await wire.getByTestId('wire-team').click()
   await expect(wire.getByTestId('wire-team')).toHaveCount(0)
 

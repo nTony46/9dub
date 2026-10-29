@@ -15,7 +15,7 @@ import { teamLabel, useEngine, useLineupSlots, type EngineData } from '@/store/d
 import { currentWeek, todayIso } from '@/store/season'
 import type { LeagueSeed, MatchupWeek } from '@/store/schema'
 import { FinalDetail, MatchupDetail } from './MatchupDetail'
-import { finalFor, liveFor, opponentName, projectWeek, rangeText, useCurrentRosters, useInjuries, useScheduleIndex, type ProjectionOptions } from './model'
+import { finalFor, liveFor, opponentName, projectWeek, rangeText, useCurrentRosters, useInjuries, useScheduleIndex, useWirePlacement, type ProjectionOptions } from './model'
 
 export function MatchupsView() {
   const engine = useEngine()
@@ -62,6 +62,10 @@ export function MatchupsView() {
     )
   }, [engine, index, me, sorted, rosters, opts, espnLive, finals])
 
+  // Docked waiver wire: its own column on the left, filled by the matchup below (a portal keeps its state there).
+  const docked = useWirePlacement() === 'dock'
+  const [dock, setDock] = useState<HTMLElement | null>(null)
+
   if (!engine) return <Empty title="No dataset loaded" />
   if (me == null)
     return (
@@ -85,6 +89,7 @@ export function MatchupsView() {
       ? `Projected record ${won}–${lost}${tied ? `–${tied}` : ''}`
       : undefined
   const weekFinal = week ? finals.get(week.id) : undefined
+  const showsDetail = !!(week && !weekFinal && week.opponent != null)
   return (
     <div className="grid gap-4" data-testid="matchups-view">
       {!index ? <ScheduleSetup /> : null}
@@ -92,7 +97,28 @@ export function MatchupsView() {
       {sorted.length && (unmapped || mapping) ? <OpponentMapper weeks={sorted} engine={engine} rosters={rosters} me={me} onDone={() => setMapping(false)} /> : null}
 
       {index && sorted.length ? (
-        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_316px]">
+        <div
+          className={cn(
+            'grid items-start gap-4',
+            // Docked: wire | matchup, the schedule under the matchup until there's room for it on the right.
+            docked ? 'grid-cols-[minmax(440px,540px)_minmax(0,1fr)] min-[2100px]:grid-cols-[minmax(480px,600px)_minmax(0,1fr)_316px]' : 'xl:grid-cols-[minmax(0,1fr)_316px]',
+          )}
+        >
+          {docked ? (
+            <aside
+              ref={setDock}
+              aria-label="Waiver wire"
+              data-testid="wire-dock"
+              className="sticky top-4 row-span-2 max-h-[calc(100dvh-6.5rem)] overflow-y-auto overscroll-contain rounded-lg border border-seam bg-floor min-[2100px]:row-span-1"
+            >
+              {showsDetail ? null : (
+                <div className="p-4">
+                  <h3 className="label-caps">Waiver wire</h3>
+                  <p className="mt-2 text-[13px] text-chalk-3">The waiver wire works on a week still to play. Pick this week or a later one in the schedule.</p>
+                </div>
+              )}
+            </aside>
+          ) : null}
           <div className="min-w-0">
             {week && weekFinal ? (
               <FinalDetail key={week.id} week={week} weekNo={sorted.indexOf(week) + 1} final={weekFinal} me={me} />
@@ -109,6 +135,7 @@ export function MatchupsView() {
                 me={me}
                 opts={opts}
                 setOpts={(o) => setAvailability(o.availability)}
+                dock={docked ? dock : null}
               />
             ) : (
               <Panel title="Pick a week">
@@ -118,6 +145,7 @@ export function MatchupsView() {
           </div>
 
           <Panel
+            className={cn(docked && 'col-start-2 min-[2100px]:col-start-3 min-[2100px]:row-start-1')}
             title="Your schedule"
             subtitle={subtitle}
             actions={

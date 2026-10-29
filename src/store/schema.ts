@@ -90,6 +90,8 @@ export const PrefsSchema = z.object({
   availableOnly: z.boolean().default(true),
   /** The first-run ESPN setup was finished or skipped. */
   setupDone: z.boolean().default(false),
+  /** The waiver wire is shown on the matchup page. */
+  waiverWire: z.boolean().default(true),
 })
 export type Prefs = z.infer<typeof PrefsSchema>
 
