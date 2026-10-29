@@ -318,7 +318,7 @@ A weak category becomes a **punt candidate** only when all of these hold:
 - **Injuries:** a player marked out contributes nothing through his *until* date (or indefinitely) and is listed in an IR slot when one is free.
 - **Trade lab:** gives leave and gets arrive. When all incoming players come from one team, the gives go to that team, so its matchups change too; otherwise (pickups) the gives are dropped. This week and every remaining week are re-projected.
 - **Totals:** per-game line × started games. FG% and FT% are total makes ÷ total attempts. *Expect missed games* optionally scales each game by projected GP ÷ 82.
-- **Live totals:** for the week in progress, ESPN's category totals so far are added to a projection of only the games that haven't tipped off (from the sync's day on, minus teams whose game had started). Makes and attempts are summed, so FG% and FT% combine correctly.
+- **Live totals:** for the week in progress, ESPN's live category totals (games in progress included, as on ESPN's matchup page) are added to a projection of only the games that haven't tipped off (from the sync's day on, minus teams whose game had started). Makes and attempts are summed, so FG% and FT% combine correctly.
 - **Spread:** the final margin's uncertainty comes only from what is still to be played.
   - Counting categories are sums of independent rare events (Poisson), so a total's variance equals its mean.
   - Points are a weighted sum of made 2s, 3s and free throws (compound Poisson): variance = 4·2PM + 9·3PM + 1·FTM, about 2.3× the points total.

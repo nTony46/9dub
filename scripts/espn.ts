@@ -182,7 +182,8 @@ export async function fetchEspnSnapshot(root: string, fallbackSeason: number, op
     if (!leagues.length) throw new EspnError(`No ESPN fantasy basketball league found for ${season - 1}–${String(season).slice(2)} on this account.`)
     auth = writeEspnAuth(root, { leagueId: leagues[0].id, season })
   }
-  const views = ['mTeam', 'mRoster', 'mSettings', 'mMatchup', 'mDraftDetail'].map((v) => `view=${v}`).join('&')
+  // mLiveScoring adds each matchup side's live totals (cumulativeScoreLive); cumulativeScore alone lags by hours.
+  const views = ['mTeam', 'mRoster', 'mSettings', 'mMatchup', 'mLiveScoring', 'mDraftDetail'].map((v) => `view=${v}`).join('&')
   const league = (await espnRead(`${ESPN_READ_BASE}/seasons/${season}/segments/0/leagues/${auth.leagueId}?${views}`, auth)) as {
     teams?: { roster?: { entries?: { playerId?: number }[] } }[]
     draftDetail?: { picks?: { playerId?: number }[] }

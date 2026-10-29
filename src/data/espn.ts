@@ -181,9 +181,17 @@ interface RawPlayer {
   /** statSourceId 0 = actual (1 = ESPN's projection, never used); statSplitTypeId 0 = season, 2 = last 15 days. */
   stats?: { seasonId?: number; statSourceId?: number; statSplitTypeId?: number; stats?: Record<string, number> }[]
 }
+interface RawScore {
+  wins?: number
+  losses?: number
+  ties?: number
+  scoreByStat?: Record<string, { score?: number; result?: string | null } | null>
+}
 interface RawSide {
   teamId?: number
-  cumulativeScore?: { wins?: number; losses?: number; ties?: number; scoreByStat?: Record<string, { score?: number; result?: string | null } | null> }
+  cumulativeScore?: RawScore
+  /** Up to the minute, games in progress included (with the mLiveScoring view); cumulativeScore lags by hours. */
+  cumulativeScoreLive?: RawScore
 }
 interface RawEntry {
   playerId?: number
@@ -257,9 +265,11 @@ export function playerStatsOf(p: RawPlayer, seasonId: number, codes: ReadonlyMap
   }
 }
 
-function totalsOf(side: RawSide | undefined): EspnTotals {
+/** A side's category totals: the live ones for the week in progress, else the settled ones. */
+function totalsOf(side: RawSide | undefined, live = false): EspnTotals {
+  const score = (live ? side?.cumulativeScoreLive : undefined) ?? side?.cumulativeScore
   const out: EspnTotals = { pts: 0, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, ftm: 0, fta: 0 }
-  for (const [id, key] of Object.entries(STAT_KEYS)) out[key] = Number(side?.cumulativeScore?.scoreByStat?.[id]?.score ?? 0) || 0
+  for (const [id, key] of Object.entries(STAT_KEYS)) out[key] = Number(score?.scoreByStat?.[id]?.score ?? 0) || 0
   return out
 }
 
@@ -411,7 +421,7 @@ export function snapshotFromEspn(rawLeague: unknown, rawProTeams: unknown, fetch
           teams: current
             .flatMap((m) => [m.home, m.away])
             .filter((side): side is RawSide => side?.teamId != null && slots.has(side.teamId))
-            .map((side) => ({ slot: slots.get(side.teamId!)!, totals: totalsOf(side) })),
+            .map((side) => ({ slot: slots.get(side.teamId!)!, totals: totalsOf(side, true) })),
         }
       : null
   // Finished matchups (ESPN names a winner once the week is scored) and the standings that follow from them.

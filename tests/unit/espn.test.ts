@@ -28,7 +28,12 @@ const rawLeague = {
     { id: 7, name: 'First Pick', abbrev: 'FP', roster: { entries: [entry(70, 'Nikola Jokić', 7, 4, [4, 9, 10, 11, 12, 13])] } },
   ],
   schedule: [
-    { matchupPeriodId: 1, home: { teamId: 7, ...score(50, 20, 40) }, away: { teamId: 3, ...score(44, 15, 38) } },
+    {
+      matchupPeriodId: 1,
+      // The live totals (games in progress included) win over cumulativeScore, which lags.
+      home: { teamId: 7, ...score(30, 12, 25), cumulativeScoreLive: score(50, 20, 40).cumulativeScore },
+      away: { teamId: 3, ...score(44, 15, 38) },
+    },
     { matchupPeriodId: 2, home: { teamId: 3 }, away: { teamId: 7 } },
     { matchupPeriodId: 3, home: { teamId: 7 }, away: { teamId: 3 } }, // playoffs: dropped
   ],
