@@ -1,9 +1,10 @@
 import { ArrowDown, ArrowRight, ArrowUp, Bandage, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { CATEGORIES, CATEGORY_META, type Category } from '@/analytics/categories'
-import { chaseVerdict, OUTLOOK_TEXT, outlookOf, type Outlook } from '@/analytics/chase'
+import { chaseVerdict, defaultTargets, OUTLOOK_TEXT, outlookOf, pickupDeltas, targetFit, type Outlook } from '@/analytics/chase'
 import { scoreText, weekTotals, type CategoryCall, type DaySlate, type SideProjection, type WeekCall, type WeekTotals as Totals } from '@/analytics/matchup'
+import { POSITIONS, type Position } from '@/analytics/positions'
 import { Positions } from '@/components/PlayerBits'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -11,12 +12,13 @@ import { Segmented, Select, Switch } from '@/components/ui/Controls'
 import { Tip } from '@/components/ui/Tooltip'
 import { cn } from '@/lib/cn'
 import { useApp } from '@/store/appStore'
+import { localDate } from '@/data/espn'
 import { teamLabel, type EngineData, type PlayerInfo } from '@/store/derived'
 import { applyTrade, irPlacement, todayIso, type TradeDraft } from '@/store/season'
-import type { MatchupWeek } from '@/store/schema'
+import type { EspnSync, MatchupWeek } from '@/store/schema'
 import { PlayerPicker } from './PlayerPicker'
 import { WeekGrid } from './WeekGrid'
-import { chasePlan, dayLabel, lineSource, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
+import { actualLine, chasePlan, dayLabel, lineSource, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
 
 const pct3 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(3).replace(/^0/, ''))
 const n1 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(1))
@@ -76,10 +78,34 @@ export function MatchupDetail({
 
   // Pickups for the rest of this week: free agents (on no roster as of the last sync), tried in place of the drop.
   const injuries = useApp((s) => s.season.injuries)
+  const espnStats = useApp((s) => s.season.espn?.stats)
+  const teamStatus = useApp((s) => s.season.espn?.teamStatus)
   const pool = useMemo(
-    () => engine.players.filter((p) => (p.line || p.standIn) && p.team && !teamOf.has(p.id) && !injuries.some((i) => i.playerId === p.id) && p.rec.provenance?.status?.tag !== 'out').map((p) => p.id),
-    [engine, teamOf, injuries],
+    () =>
+      engine.players
+        .filter(
+          (p) =>
+            (p.line || p.standIn) &&
+            p.team &&
+            !teamOf.has(p.id) &&
+            !injuries.some((i) => i.playerId === p.id) &&
+            p.rec.provenance?.status?.tag !== 'out' &&
+            espnStats?.[p.id]?.injuryStatus !== 'OUT',
+        )
+        .map((p) => p.id),
+    [engine, teamOf, injuries, espnStats],
   )
+  // Waiver claims: a player counts from the day his claim clears (a day already past changes nothing). Last 15 days: tried at his actual recent line.
+  const firstDay = useMemo(
+    () => (id: string) => {
+      const t = Date.parse(espnStats?.[id]?.waiverClears ?? '')
+      return Number.isNaN(t) ? null : localDate(t)
+    },
+    [espnStats],
+  )
+  const lineFor = useMemo(() => (id: string) => actualLine(espnStats?.[id])?.line ?? null, [espnStats])
+  const [basis, setBasis] = useState<WireBasis>('projection')
+  const [wireTeam, setWireTeam] = useState<string | null>(null)
   const rank = (id: string) => {
     const v = engine.valuation.values.get(id)
     return v ? (engine.ctx.basis === 'gpAware' ? v.rankGp : v.rank) : 9999
@@ -90,9 +116,15 @@ export function MatchupDetail({
   const [dropChoice, setDropChoice] = useState<string | null>(null)
   const drop = needDrop ? (dropChoice && active.includes(dropChoice) ? dropChoice : (dropOptions[0] ?? null)) : null
   const plan = useMemo(
-    () => (opp == null ? null : chasePlan(engine, index, rosters[me], rosters[opp], week.start, week.end, opts, live, pool, drop, today)),
-    [engine, index, rosters, me, opp, week.start, week.end, opts, live, pool, drop, today],
+    () => (opp == null ? null : chasePlan(engine, index, rosters[me], rosters[opp], week.start, week.end, opts, live, pool, drop, today, { firstDay })),
+    [engine, index, rosters, me, opp, week.start, week.end, opts, live, pool, drop, today, firstDay],
   )
+  const wirePlan = useMemo(
+    () =>
+      basis === 'last15' && opp != null ? chasePlan(engine, index, rosters[me], rosters[opp], week.start, week.end, opts, live, pool, drop, today, { firstDay, lineFor }) : plan,
+    [basis, plan, engine, index, rosters, me, opp, week.start, week.end, opts, live, pool, drop, today, firstDay, lineFor],
+  )
+  const myStatus = teamStatus?.find((t) => t.slot === me + 1)
 
   const { call } = proj
   const oppLabel = opp == null ? 'No opponent' : opp === week.opponent ? opponentName(settings, week) : teamLabel(settings, opp)
@@ -171,9 +203,9 @@ export function MatchupDetail({
         <CategoryTable proj={proj} current={current} myName={myName} oppName={oppLabel} plan={plan} name={(id) => engine.byId.get(id)?.name ?? id} />
       </div>
 
-      {plan ? (
-        <Pickups
-          plan={plan}
+      {wirePlan ? (
+        <WaiverWire
+          plan={wirePlan}
           engine={engine}
           drop={drop}
           dropOptions={needDrop ? dropOptions : []}
@@ -182,6 +214,12 @@ export function MatchupDetail({
             setTrade({ give: drop ? [drop] : [], get: [id] })
             setTimeout(() => document.querySelector('[data-testid="trade-lab"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
           }}
+          basis={basis}
+          setBasis={espnStats && Object.values(espnStats).some((s) => s.available) ? setBasis : null}
+          stats={espnStats && Object.keys(espnStats).length ? espnStats : undefined}
+          status={myStatus ? { rank: myStatus.waiverRank, teams: settings.teams, pickups: myStatus.pickups } : null}
+          team={wireTeam}
+          setTeam={setWireTeam}
         />
       ) : null}
 
@@ -227,6 +265,10 @@ export function MatchupDetail({
             index={index}
             from={from}
             started={live?.fromDate === from ? live.started : undefined}
+            onTeam={(t) => {
+              setWireTeam(t)
+              document.getElementById('waiver-wire')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }}
           />
         ) : (
           <>
@@ -486,14 +528,43 @@ function CategoryTable({
 
 const OUTLOOK_RANK: Record<Outlook, number> = { 'far-behind': 0, behind: 1, 'toss-up': 2, ahead: 3, safe: 4 }
 
-/** The few free agents that move a category this week, one click from the trade lab. */
-function Pickups({
+type WireSort = 'fit' | 'games' | 'min' | Category
+type WireBasis = 'projection' | 'last15'
+/** Rows shown before "Show all". */
+const WIRE_ROWS = 15
+
+const fmtDelta = (c: Category, v: number | undefined) => {
+  if (v == null) return '–'
+  const sign = v >= 0 ? '+' : '−'
+  if (c === 'FG' || c === 'FT') return Math.abs(v) < 0.0005 ? '0' : sign + Math.abs(v).toFixed(3).replace(/^0/, '')
+  return Math.abs(v) < 0.05 ? '0' : sign + Math.abs(v).toFixed(Math.abs(v) >= 10 ? 0 : 1)
+}
+const deltaTone = (c: Category, v: number | undefined) => {
+  if (v == null || Math.abs(v) < (c === 'FG' || c === 'FT' ? 0.0005 : 0.05)) return 'text-chalk-3'
+  return (c === 'TO' ? v < 0 : v > 0) ? 'text-plus' : 'text-minus'
+}
+const clearsText = (iso: string, long = false) =>
+  new Date(iso).toLocaleString([], long ? { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric' })
+
+/**
+ * The waiver wire for the rest of this week: every free agent and waiver
+ * player, each tried in place of the drop. Pick the categories you're after;
+ * a row shows the games he'd start for you (from the day his claim clears)
+ * and what he adds to your week in each of them.
+ */
+function WaiverWire({
   plan,
   engine,
   drop,
   dropOptions,
   setDrop,
   onTry,
+  basis,
+  setBasis,
+  stats,
+  status,
+  team,
+  setTeam,
 }: {
   plan: ChasePlan
   engine: EngineData
@@ -501,24 +572,70 @@ function Pickups({
   dropOptions: string[]
   setDrop: (id: string | null) => void
   onTry: (id: string) => void
+  basis: WireBasis
+  /** null = no ESPN stats to switch to. */
+  setBasis: ((b: WireBasis) => void) | null
+  stats: EspnSync['stats'] | undefined
+  status: { rank: number | null; teams: number; pickups: number | null } | null
+  team: string | null
+  setTeam: (team: string | null) => void
 }) {
   const openPreview = useApp((s) => s.openPreview)
+  const [targets, setTargets] = useState<Category[]>(() => defaultTargets(plan.baseCall))
+  const [sort, setSort] = useState<WireSort>('fit')
+  const [pos, setPos] = useState<Position | ''>('')
+  const [faOnly, setFaOnly] = useState(false)
+  const [all, setAll] = useState(false)
+  const [now] = useState(() => Date.now())
+  const waiverOf = (id: string) => {
+    const c = stats?.[id]?.waiverClears
+    return c && Date.parse(c) > now ? c : null
+  }
+  const anyWaivers = plan.options.some((o) => waiverOf(o.id))
+  const minutes = (id: string) => {
+    const s = stats?.[id]
+    const span = basis === 'last15' && s?.recent && s.recent.gp >= 2 ? s.recent : s?.season
+    return span && span.gp > 0 ? span.min / span.gp : (engine.byId.get(id)?.proj?.minutesPerGame ?? null)
+  }
+  const cols = CATEGORIES.filter((c) => targets.includes(c))
+  const sign = (c: Category) => (c === 'TO' ? -1 : 1)
   const rows = plan.options
-    .filter((o) => o.gain > 0.02)
-    .map((o) => ({
-      o,
-      moves: CATEGORIES.map((cat, i) => ({ cat, from: outlookOf(plan.baseCall.calls[i]), to: outlookOf(o.call.calls[i]) })).filter(
-        (m): m is { cat: Category; from: Outlook; to: Outlook } => m.from != null && m.to != null && m.from !== m.to,
-      ),
-    }))
-    .filter((r) => r.moves.some((m) => OUTLOOK_RANK[m.to] > OUTLOOK_RANK[m.from]))
-    .slice(0, 3)
+    .filter((o) => {
+      const p = engine.byId.get(o.id)
+      return (!pos || p?.positions.includes(pos)) && (!faOnly || !waiverOf(o.id)) && (!team || p?.team === team)
+    })
+    .map((o) => ({ o, d: pickupDeltas(plan.baseCall, o), fit: targetFit(plan.baseCall, o, targets.length ? targets : CATEGORIES), min: minutes(o.id) }))
+    .sort((a, b) => {
+      if (sort === 'games') return b.o.starts - a.o.starts || b.fit - a.fit
+      if (sort === 'min') return (b.min ?? -1) - (a.min ?? -1) || b.fit - a.fit
+      if (sort === 'fit') return b.fit - a.fit || b.o.starts - a.o.starts
+      return sign(sort) * ((b.d[sort] ?? 0) - (a.d[sort] ?? 0)) || b.fit - a.fit
+    })
+  const shown = all ? rows : rows.slice(0, WIRE_ROWS)
+  const head = (key: WireSort, label: ReactNode, tip: string, align: 'left' | 'right' = 'right') => (
+    <th key={key} className={cn('h-9 border-b border-seam-strong px-2 font-medium', align === 'right' ? 'text-right' : 'text-left')} aria-sort={sort === key ? 'descending' : undefined}>
+      <Tip content={tip}>
+        <button type="button" onClick={() => setSort(key)} className={cn('inline-flex items-center gap-0.5 hover:text-chalk', sort === key ? 'text-chalk' : 'text-chalk-3')}>
+          {label}
+          {sort === key ? <ArrowDown size={11} /> : null}
+        </button>
+      </Tip>
+    </th>
+  )
+  const toggle = (c: Category) => setTargets((t) => (t.includes(c) ? t.filter((x) => x !== c) : [...t, c]))
   return (
-    <div className="border-t border-seam px-5 py-4" data-testid="pickups">
-      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <Tip content="Free agents (on no roster as of your last ESPN sync), each tried for the rest of this week in place of the player you'd drop. They count only on nights they'd start. Recently dropped players may still be on waivers.">
-          <h3 className="label-caps">Pickups this week</h3>
+    <div className="border-t border-seam px-5 py-4" data-testid="waiver-wire" id="waiver-wire">
+      <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <Tip content="Free agents and players on waivers as of your last ESPN sync, each tried for the rest of this week in place of the player you'd drop. Games count only on nights he'd start for you, from the day his waiver claim clears.">
+          <h3 className="label-caps">Waiver wire</h3>
         </Tip>
+        {status ? (
+          <span className="text-[12.5px] text-chalk-3" data-testid="wire-status">
+            {status.rank != null ? `Waiver #${status.rank} of ${status.teams}` : null}
+            {status.rank != null && status.pickups != null ? ' · ' : null}
+            {status.pickups != null ? `${status.pickups} pickup${status.pickups === 1 ? '' : 's'} this week` : null}
+          </span>
+        ) : null}
         {dropOptions.length ? (
           <label className="ml-auto flex items-center gap-2 text-[12.5px] text-chalk-3">
             Dropping
@@ -532,43 +649,152 @@ function Pickups({
           </label>
         ) : null}
       </div>
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Categories you’re after">
+          <Tip content="The categories you're after: rows rank by how much they add to these (fewer turnovers counts as help), with a column each. To start: every category you're not clearly winning, except ones out of reach.">
+            <span className="mr-1 text-[12.5px] text-chalk-3">Chasing</span>
+          </Tip>
+          {CATEGORIES.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-pressed={targets.includes(c)}
+              onClick={() => toggle(c)}
+              className={cn(
+                'h-7 rounded-md border px-2 font-mono text-[12px] font-semibold transition-colors',
+                targets.includes(c) ? 'border-clock-line bg-clock-soft text-clock' : 'border-seam text-chalk-3 hover:border-seam-strong hover:text-chalk-2',
+              )}
+            >
+              {catHead(c)}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+          {setBasis ? (
+            <Tip content="Projection: each player's projected line (or his estimate from ESPN stats). Last 15 days: what he has actually done lately, per game (this season when he has fewer than two games in that span).">
+              <span>
+                <Segmented<WireBasis>
+                  label="Stats basis"
+                  size="xs"
+                  value={basis}
+                  onChange={setBasis}
+                  options={[
+                    { value: 'projection', label: 'Projection' },
+                    { value: 'last15', label: 'Last 15 days' },
+                  ]}
+                />
+              </span>
+            </Tip>
+          ) : null}
+          <Select value={pos} onChange={(e) => setPos(e.target.value as Position | '')} className="h-7 w-[136px] text-[12.5px]" aria-label="Position">
+            <option value="">All positions</option>
+            {POSITIONS.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </Select>
+          {anyWaivers ? (
+            <span className="flex items-center gap-2 text-[12.5px] text-chalk-2">
+              <Switch checked={faOnly} onChange={setFaOnly} label="Free agents only" />
+              Free agents only
+            </span>
+          ) : null}
+          {team ? (
+            <button type="button" onClick={() => setTeam(null)} className="inline-flex h-7 items-center gap-1 rounded-md border border-clock-line bg-clock-soft px-2 font-mono text-[12px] font-semibold text-clock" data-testid="wire-team">
+              {team}
+              <X size={12} aria-label="Clear team" />
+            </button>
+          ) : null}
+        </div>
+      </div>
       {rows.length ? (
-        <ul>
-          {rows.map(({ o, moves }) => {
-            const p = engine.byId.get(o.id)
-            return (
-              <li key={o.id} className="flex h-10 items-center gap-2.5 border-t border-seam text-[13.5px] first:border-t-0" data-testid="pickup">
-                <button type="button" onClick={() => openPreview(o.id)} className="min-w-0 truncate text-left font-medium hover:underline">
-                  {p?.name ?? o.id}
-                </button>
-                <Positions positions={p?.positions ?? []} className="shrink-0 text-[11px]" />
-                <span className="shrink-0 font-mono text-[11.5px] text-chalk-3">{p?.team}</span>
-                {p ? <SourceTag p={p} /> : null}
-                <span className="shrink-0 text-[12px] text-chalk-3">
-                  {o.starts} start{o.starts === 1 ? '' : 's'}
-                </span>
-                <span className="ml-auto flex min-w-0 flex-wrap justify-end gap-1.5">
-                  {moves.map((m) => {
-                    const up = OUTLOOK_RANK[m.to] > OUTLOOK_RANK[m.from]
-                    return (
-                      <Tip key={m.cat} content={`${catHead(m.cat)}: ${OUTLOOK_TEXT[m.from]} → ${OUTLOOK_TEXT[m.to]}`}>
-                        <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono text-[11.5px] font-semibold', up ? 'bg-plus/12 text-plus' : 'bg-minus/12 text-minus')}>
-                          {catHead(m.cat)}
-                          {up ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
-                        </span>
-                      </Tip>
-                    )
-                  })}
-                </span>
-                <Button size="xs" variant="subtle" onClick={() => onTry(o.id)}>
-                  Try
-                </Button>
-              </li>
-            )
-          })}
-        </ul>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] border-separate border-spacing-0 text-[13.5px]">
+            <thead>
+              <tr className="text-[12.5px]">
+                {head('fit', 'Player', 'Sort by how much he adds to the categories you picked', 'left')}
+                {stats ? <th className="h-9 border-b border-seam-strong px-2 text-left font-medium text-chalk-3">Status</th> : null}
+                {head('games', 'Games', 'Games he would start for you, from the day he can play')}
+                {head('min', 'MIN', basis === 'last15' ? 'Minutes per game, last 15 days' : 'Minutes per game this season (ESPN), else projected')}
+                {cols.map((c) => head(c, catHead(c), `What he adds to your week in ${CATEGORY_META[c].name}${c === 'TO' ? ' (fewer is better)' : ''}, after the drop`))}
+                <th className="h-9 border-b border-seam-strong px-2 text-right font-medium text-chalk-3">Changes</th>
+                <th className="h-9 border-b border-seam-strong" />
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(({ o, d, min }) => {
+                const p = engine.byId.get(o.id)
+                const clears = waiverOf(o.id)
+                const moves = CATEGORIES.map((cat, i) => ({ cat, from: outlookOf(plan.baseCall.calls[i]), to: outlookOf(o.call.calls[i]) })).filter(
+                  (m): m is { cat: Category; from: Outlook; to: Outlook } => m.from != null && m.to != null && m.from !== m.to,
+                )
+                return (
+                  <tr key={o.id} data-testid="wire-row">
+                    <td className="h-10 max-w-[260px] border-b border-seam pr-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <button type="button" onClick={() => openPreview(o.id)} className="min-w-0 truncate text-left font-medium hover:underline">
+                          {p?.name ?? o.id}
+                        </button>
+                        <Positions positions={p?.positions ?? []} className="shrink-0 text-[11px]" />
+                        <span className="shrink-0 font-mono text-[11.5px] text-chalk-3">{p?.team}</span>
+                        {p && basis === 'projection' ? <SourceTag p={p} /> : null}
+                      </span>
+                    </td>
+                    {stats ? (
+                      <td className="border-b border-seam px-2 text-[12.5px]">
+                        {clears ? (
+                          <Tip content={`On waivers until ${clearsText(clears, true)}. He counts only from then, and claims go by waiver priority.`}>
+                            <span className="whitespace-nowrap text-warn">Waivers · {clearsText(clears)}</span>
+                          </Tip>
+                        ) : (
+                          <span className="text-chalk-3">FA</span>
+                        )}
+                      </td>
+                    ) : null}
+                    <td className="whitespace-nowrap border-b border-seam px-2 text-right">
+                      <span className="font-mono font-semibold tnum">{o.starts}</span>{' '}
+                      <span className="whitespace-nowrap text-[11.5px] text-chalk-3">{o.days.map((x) => dayLabel(x).dow).join(' ')}</span>
+                    </td>
+                    <td className="border-b border-seam px-2 text-right font-mono tnum text-chalk-2">{min != null ? min.toFixed(1) : '–'}</td>
+                    {cols.map((c) => (
+                      <td key={c} className={cn('border-b border-seam px-2 text-right font-mono tnum', deltaTone(c, d[c]))}>
+                        {fmtDelta(c, d[c])}
+                      </td>
+                    ))}
+                    <td className="min-w-[124px] border-b border-seam px-2 py-1 text-right">
+                      <span className="inline-flex flex-wrap justify-end gap-1">
+                        {moves.map((m) => {
+                          const up = OUTLOOK_RANK[m.to] > OUTLOOK_RANK[m.from]
+                          return (
+                            <Tip key={m.cat} content={`${catHead(m.cat)}: ${OUTLOOK_TEXT[m.from]} → ${OUTLOOK_TEXT[m.to]}`}>
+                              <span className={cn('inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 font-mono text-[11.5px] font-semibold', up ? 'bg-plus/12 text-plus' : 'bg-minus/12 text-minus')}>
+                                {catHead(m.cat)}
+                                {up ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+                              </span>
+                            </Tip>
+                          )
+                        })}
+                      </span>
+                    </td>
+                    <td className="border-b border-seam pl-2 text-right">
+                      <Button size="xs" variant="subtle" onClick={() => onTry(o.id)}>
+                        Try
+                      </Button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {rows.length > WIRE_ROWS ? (
+            <Button variant="ghost" size="xs" className="mt-1.5" onClick={() => setAll(!all)} data-testid="wire-all">
+              {all ? `Show top ${WIRE_ROWS}` : `Show all ${rows.length}`}
+            </Button>
+          ) : null}
+        </div>
       ) : (
-        <p className="text-[13px] text-chalk-3">No single pickup changes a category this week.</p>
+        <p className="text-[13px] text-chalk-3">{plan.options.length ? 'Nobody matches these filters.' : 'No free agent adds a start this week.'}</p>
       )}
     </div>
   )

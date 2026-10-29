@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
 import { bestPerCategory, rankPickups, type BestForCategory, type PickupResult } from '@/analytics/chase'
 import type { Category } from '@/analytics/categories'
+import type { StatLine } from '@/analytics/types'
 import { addTotals, compareWeek, projectSide, weekTotals, type MatchupPlayer, type SideProjection, type WeekCall, type WeekTotals } from '@/analytics/matchup'
 import { ESPN_DEFAULT_SLOTS, fillLineup, type SlotDef } from '@/analytics/positions'
 import type { EspnResultSide } from '@/data/espn'
-import { datesBetween, teamsByDate, type NbaSchedule } from '@/data/schedule'
+import { addDays, datesBetween, teamsByDate, type NbaSchedule } from '@/data/schedule'
 import { useApp } from '@/store/appStore'
 import { teamLabel, useDraft, type EngineData, type PlayerInfo } from '@/store/derived'
 import { activeInjuries, currentRosters, todayIso, type CurrentRosters } from '@/store/season'
@@ -199,9 +200,34 @@ export interface ChasePlan {
 }
 
 /**
+ * A player's actual per-game line from ESPN: the last 15 days (with at least
+ * two games there), else this season; null when he hasn't played.
+ */
+export function actualLine(s: Pick<EspnSync['stats'][string], 'season' | 'recent'> | undefined): { line: StatLine; mpg: number; span: 'last 15 days' | 'this season' } | null {
+  const pick = s?.recent && s.recent.gp >= 2 ? { t: s.recent, span: 'last 15 days' as const } : s?.season && s.season.gp >= 1 ? { t: s.season, span: 'this season' as const } : null
+  if (!pick) return null
+  const { t, span } = pick
+  const g = (v: number) => v / t.gp
+  return {
+    line: { pts: g(t.pts), tpm: g(t.tpm), reb: g(t.reb), ast: g(t.ast), stl: g(t.stl), blk: g(t.blk), tov: g(t.tov), fgm: g(t.fgm), fga: g(t.fga), ftm: g(t.ftm), fta: g(t.fta) },
+    mpg: g(t.min),
+    span,
+  }
+}
+
+/** How pickups are tried, beyond their projection. */
+export interface PickupOptions {
+  /** Per-game line to try a pickup at instead of his own (e.g. his last 15 days); null = his own. */
+  lineFor?: (id: string) => StatLine | null
+  /** First day a pickup can play (when his waiver claim clears); null = right away. */
+  firstDay?: (id: string) => string | null
+}
+
+/**
  * Every free agent tried as a pickup for the rest of the week (dropping
  * `drop`, if the roster is full): the remaining days are re-projected with the
- * daily lineup engine, so he only counts on nights he'd actually start.
+ * daily lineup engine, so he only counts on nights he'd actually start, from
+ * the day he can play.
  */
 export function chasePlan(
   engine: EngineData,
@@ -215,6 +241,7 @@ export function chasePlan(
   pool: readonly string[],
   drop: string | null,
   today: string,
+  pick: PickupOptions = {},
 ): ChasePlan | null {
   const from = live?.fromDate && live.fromDate > start ? live.fromDate : today > start ? today : start
   const rest = datesBetween(start, end).filter((d) => d >= from)
@@ -223,11 +250,27 @@ export function chasePlan(
     const teams = index.byDate.get(d)
     return live && d === live.fromDate && teams ? new Set([...teams].filter((t) => !live.started.has(t))) : teams
   }
-  const restOf = (ids: readonly string[]) => projectSide(matchupPlayers(ids, engine, opts), rest, restPlaying, opts.slots ?? ESPN_DEFAULT_SLOTS)
+  const slots = opts.slots ?? ESPN_DEFAULT_SLOTS
+  const restOf = (ids: readonly string[]) => projectSide(matchupPlayers(ids, engine, opts), rest, restPlaying, slots)
+  const kept = mine.filter((id) => id !== drop)
+  // The pickup at his tried line, out until the day he can play.
+  const withPickup = (id: string) =>
+    projectSide(
+      matchupPlayers([...kept, id], engine, opts).map((p) => {
+        if (p.id !== id) return p
+        const line = pick.lineFor?.(id)
+        const first = pick.firstDay?.(id)
+        const waiting = first && first > from ? addDays(first, -1) : undefined
+        const outThrough = waiting && p.outThrough !== null && (p.outThrough == null || waiting > p.outThrough) ? waiting : p.outThrough
+        return { ...p, ...(line ? { line } : {}), outThrough }
+      }),
+      rest,
+      restPlaying,
+      slots,
+    )
   const restMe = restOf(mine).totals
   const restThem = restOf(theirs).totals
   const week = projectWeek(engine, index, mine, theirs, start, end, opts, live)
-  const kept = mine.filter((id) => id !== drop)
   const playsLeft = new Set(rest.flatMap((d) => [...(restPlaying(d) ?? [])]))
   const inputs = pool
     .filter((id) => {
@@ -235,8 +278,8 @@ export function chasePlan(
       return team != null && playsLeft.has(team)
     })
     .map((id) => {
-      const side = restOf([...kept, id])
-      return { id, starts: side.players.get(id)?.starts ?? 0, restMe: side.totals }
+      const side = withPickup(id)
+      return { id, starts: side.players.get(id)?.starts ?? 0, days: side.days.filter((d) => d.started.includes(id)).map((d) => d.date), restMe: side.totals }
     })
     .filter((o) => o.starts > 0)
   const { baseCall, results } = rankPickups({ me: week.me.totals, them: week.them.totals, restMe, restThem, live: !!live && !!(live.me || live.them) }, inputs)

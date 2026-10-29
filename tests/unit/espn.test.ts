@@ -24,7 +24,7 @@ const rawLeague = {
   status: { currentMatchupPeriod: 1 },
   settings: { name: 'Test League', draftSettings: { pickOrder: [7, 3] }, scheduleSettings: { matchupPeriodCount: 2 } },
   teams: [
-    { id: 3, name: 'Second Pick', abbrev: 'SP', roster: { entries: [entry(30, 'Jalen Brunson', 18, 0, [0, 1, 5, 11, 12, 13]), entry(31, 'Ja Morant', 29, 13, [0, 5, 11, 12, 13], 'OUT')] } },
+    { id: 3, name: 'Second Pick', abbrev: 'SP', waiverRank: 2, transactionCounter: { matchupAcquisitionTotals: { '1': 3, '2': 1 } }, roster: { entries: [entry(30, 'Jalen Brunson', 18, 0, [0, 1, 5, 11, 12, 13]), entry(31, 'Ja Morant', 29, 13, [0, 5, 11, 12, 13], 'OUT')] } },
     { id: 7, name: 'First Pick', abbrev: 'FP', roster: { entries: [entry(70, 'Nikola Jokić', 7, 4, [4, 9, 10, 11, 12, 13])] } },
   ],
   schedule: [
@@ -76,6 +76,11 @@ describe('ESPN snapshot', () => {
     expect(snap.live?.fromDate).toBe(localDate(Date.parse(FETCHED)))
     expect(snap.live?.started.sort()).toEqual(['DEN', 'MEM'])
     expect(snap.live?.teams.find((t) => t.slot === 1)?.totals).toMatchObject({ pts: 50, fgm: 20, fga: 40, tpm: 3, tov: 4, reb: 0 })
+  })
+
+  it('reads each team’s waiver priority and pickups in the matchup in progress', () => {
+    expect(snap.teams.find((t) => t.espnId === 3)).toMatchObject({ waiverRank: 2, pickups: 3 })
+    expect(snap.teams.find((t) => t.espnId === 7)).toMatchObject({ waiverRank: null, pickups: null })
   })
 
   it('maps a 9dub season label to ESPN’s season id', () => {
@@ -408,9 +413,14 @@ describe('player stats for stand-in lines', () => {
           },
     ),
   }
+  const CLEARS = Date.parse('2026-10-23T07:00:00.000Z')
   const freeAgents = [
-    { player: { id: 90, fullName: 'Fresh Pickup', proTeamId: 18, eligibleSlots: [0, 1], stats: [{ seasonId: 2027, statSourceId: 0, statSplitTypeId: 0, stats: ids({ '0': 30, '40': 60, '42': 3 }) }] } },
-    { player: { id: 70, fullName: 'Nikola Jokić', proTeamId: 7, stats: [] } }, // also rostered: kept once
+    {
+      status: 'FREEAGENT',
+      player: { id: 90, fullName: 'Fresh Pickup', proTeamId: 18, eligibleSlots: [0, 1], stats: [{ seasonId: 2027, statSourceId: 0, statSplitTypeId: 0, stats: ids({ '0': 30, '40': 60, '42': 3 }) }] },
+    },
+    { status: 'WAIVERS', waiverProcessDate: CLEARS, player: { id: 91, fullName: 'Waiver Claim', proTeamId: 7, injuryStatus: 'DAY_TO_DAY', eligibleSlots: [4], stats: [] } },
+    { status: 'FREEAGENT', player: { id: 70, fullName: 'Nikola Jokić', proTeamId: 7, stats: [] } }, // also rostered: kept once, as rostered
   ]
   const snap = snapshotFromEspn(withStats, rawPro, FETCHED, { freeAgents })
 
@@ -424,17 +434,25 @@ describe('player stats for stand-in lines', () => {
     expect(snap.playerStats.find((p) => p.espnId === 30)).toMatchObject({ season: null, recent: null, prior: null }) // no stats given
   })
 
-  it('keeps stats only for the players that need them (no projection)', () => {
+  it('marks free agents and waiver players, with when a claim clears', () => {
+    expect(snap.playerStats.find((p) => p.espnId === 90)).toMatchObject({ available: true, waiverClears: null })
+    expect(snap.playerStats.find((p) => p.espnId === 91)).toMatchObject({ available: true, waiverClears: new Date(CLEARS).toISOString(), injuryStatus: 'DAY_TO_DAY', positions: ['C'] })
+    expect(snap.playerStats.find((p) => p.espnId === 70)).toMatchObject({ available: false, waiverClears: null })
+  })
+
+  it('keeps stats for rostered players without a projection and for every free agent and waiver player', () => {
     const records = [
       { id: 'jokic', fullName: 'Nikola Jokic', aliases: [], nbaTeam: 'DEN' },
       { id: 'brunson', fullName: 'Jalen Brunson', aliases: [], nbaTeam: 'NYK' },
       { id: 'morant', fullName: 'Ja Morant', aliases: [], nbaTeam: 'MEM' },
       { id: 'pickup', fullName: 'Fresh Pickup', aliases: [], nbaTeam: null },
+      { id: 'claim', fullName: 'Waiver Claim', aliases: [], nbaTeam: 'DEN' },
     ]
     const input: EspnPlanInput = { records, draftRosters: [['jokic'], ['brunson', 'morant']], moves: [], injuries: [], teamNames: [], teams: 2, userSlot: 1, weeks: [], today: '2026-10-21' }
-    const plan = planEspnSync(snap, { ...input, needsStats: new Set(['jokic', 'pickup']) })
+    const plan = planEspnSync(snap, { ...input, needsStats: new Set(['jokic']) })
     if ('error' in plan) throw new Error(plan.error)
-    expect(Object.keys(plan.stats).sort()).toEqual(['jokic', 'pickup'])
+    expect(Object.keys(plan.stats).sort()).toEqual(['claim', 'jokic', 'pickup'])
+    expect(plan.stats.claim).toMatchObject({ available: true, waiverClears: new Date(CLEARS).toISOString() })
     expect(plan.stats.pickup).toMatchObject({ team: 'NYK', positions: ['PG', 'SG'], season: { gp: 3, min: 60, pts: 30 } })
     // Roster matching is unaffected by the stats.
     expect(plan.moves).toEqual([])

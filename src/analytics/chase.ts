@@ -73,6 +73,8 @@ export interface PickupInput {
   id: string
   /** Games he would start for you in the rest of the week. */
   starts: number
+  /** The days of those starts. */
+  days?: string[]
   /** My remaining totals with him in (and the drop out). */
   restMe: WeekTotals
 }
@@ -80,6 +82,7 @@ export interface PickupInput {
 export interface PickupResult {
   id: string
   starts: number
+  days: string[]
   call: WeekCall
   /** Change in expected categories won — for ranking only, never shown as a number. */
   gain: number
@@ -98,7 +101,7 @@ export function rankPickups(base: ChaseBase, options: readonly PickupInput[]): {
   const results = options.map((o) => {
     const me = plus(settled, o.restMe)
     const call = compareWeek(me, base.them, rest(o.restMe))
-    return { id: o.id, starts: o.starts, call, gain: expectedWins(call) - e0, adds: subtractTotals(o.restMe, base.restMe) }
+    return { id: o.id, starts: o.starts, days: o.days ?? [], call, gain: expectedWins(call) - e0, adds: subtractTotals(o.restMe, base.restMe) }
   })
   results.sort((a, b) => b.gain - a.gain)
   return { baseCall, results }
@@ -127,4 +130,39 @@ export function bestPerCategory(baseCall: WeekCall, results: readonly PickupResu
     }
   }
   return out
+}
+
+/** Categories worth targeting to start with: every one you're not clearly winning, except those out of reach (behind by more than this many weekly noise units). */
+const OUT_OF_REACH = 2.5
+
+export function defaultTargets(call: WeekCall): Category[] {
+  return call.calls
+    .filter((c) => c.winner != null && !(c.winner === 'me' && c.closeness === 'clear') && !(c.edge != null && c.noise != null && c.edge < -OUT_OF_REACH * c.noise))
+    .map((c) => c.cat)
+}
+
+/** A pickup's change in my final total in each category (FG% / FT% as fractions; TO as turnovers, so up is worse). */
+export function pickupDeltas(baseCall: WeekCall, r: Pick<PickupResult, 'call'>): Partial<Record<Category, number>> {
+  const out: Partial<Record<Category, number>> = {}
+  baseCall.calls.forEach((before, i) => {
+    const after = r.call.calls[i]
+    if (before.mine != null && after.mine != null) out[before.cat] = after.mine - before.mine
+  })
+  return out
+}
+
+/**
+ * How much a pickup helps the target categories, for sorting only: each
+ * category's change in units of its weekly noise (fewer turnovers counts as
+ * help), summed. A category out of reach still counts, so it ranks the
+ * players who add the most of it.
+ */
+export function targetFit(baseCall: WeekCall, r: Pick<PickupResult, 'call'>, targets: readonly Category[]): number {
+  const d = pickupDeltas(baseCall, r)
+  let fit = 0
+  for (const c of baseCall.calls) {
+    if (!targets.includes(c.cat) || d[c.cat] == null || !c.noise) continue
+    fit += ((c.cat === 'TO' ? -1 : 1) * d[c.cat]!) / c.noise
+  }
+  return fit
 }

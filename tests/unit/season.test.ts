@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateDemoDataset } from '@/data/demo/generate'
 import type { NbaSchedule } from '@/data/schedule'
-import { projectWeek } from '@/features/season/model'
+import { actualLine, chasePlan, projectWeek } from '@/features/season/model'
 import { NineDubDB, setDb } from '@/store/db'
 import { defaultPersisted, useApp } from '@/store/appStore'
 import { getEngine } from '@/store/derived'
@@ -251,5 +251,29 @@ describe('weekly lineup: a pickup with no projection', () => {
     expect(week.me.days[0].started).toEqual(['pickup'])
     expect(week.me.starts).toBe(1)
     expect(week.me.totals.pts).toBeCloseTo(engine.valuation.replacement.line.pts, 6)
+  })
+
+  it('waiver wire: a waiver claim counts only from the day it clears, and can be tried at another line', () => {
+    const engine = getEngine(useApp.getState())!
+    const [a, b] = engine.players.filter((p) => p.team && p.line)
+    const days = ['2026-11-02', '2026-11-03', '2026-11-04']
+    const index = { schedule: { tbdWindow: null } as unknown as NbaSchedule, byDate: new Map(days.map((d) => [d, new Set([a.team!])])) }
+    const plan = (pick = {}) => chasePlan(engine, index, [], [], days[0], days[2], { availability: false }, undefined, [a.id], null, days[0], pick)!
+    const free = plan().options[0]
+    expect(free).toMatchObject({ id: a.id, starts: 3, days })
+    const claim = plan({ firstDay: (id: string) => (id === a.id ? days[1] : null) }).options[0]
+    expect(claim).toMatchObject({ starts: 2, days: days.slice(1) })
+    // A clear time already past changes nothing.
+    expect(plan({ firstDay: () => '2026-10-30' }).options[0].starts).toBe(3)
+    const big = { ...b.line!, reb: 30 }
+    const tried = plan({ lineFor: (id: string) => (id === a.id ? big : null) }).options[0]
+    expect(tried.adds.reb).toBeCloseTo(90, 6)
+  })
+
+  it('actual lines: last 15 days with two games or more, else this season', () => {
+    const span = (gp: number, pts: number) => ({ gp, min: 30 * gp, pts, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, ftm: 0, fta: 0 })
+    expect(actualLine({ season: span(10, 100), recent: span(4, 80) })).toMatchObject({ span: 'last 15 days', mpg: 30, line: { pts: 20 } })
+    expect(actualLine({ season: span(10, 100), recent: span(1, 30) })).toMatchObject({ span: 'this season', line: { pts: 10 } })
+    expect(actualLine({ season: null, recent: null })).toBeNull()
   })
 })

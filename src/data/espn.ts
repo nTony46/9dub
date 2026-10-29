@@ -77,6 +77,12 @@ export const EspnPlayerStatsSchema = z.object({
   recent: EspnStatLineSchema.nullable(),
   /** Last season. */
   prior: EspnStatLineSchema.nullable(),
+  /** On no roster: a free agent, or on waivers. */
+  available: z.boolean().default(false),
+  /** On waivers until this moment (ISO); null = a free agent (or rostered). */
+  waiverClears: z.string().nullable().default(null),
+  /** ESPN's injury designation (OUT, DAY_TO_DAY…), for players on no roster. */
+  injuryStatus: z.string().nullable().default(null),
 })
 export type EspnPlayerStats = z.infer<typeof EspnPlayerStatsSchema>
 
@@ -148,6 +154,10 @@ export const EspnSnapshotSchema = z.object({
       name: z.string(),
       abbrev: z.string(),
       roster: z.array(EspnRosterEntrySchema),
+      /** Waiver priority (1 = first claim). */
+      waiverRank: z.number().int().nullable().default(null),
+      /** Pickups made in the matchup in progress. */
+      pickups: z.number().int().nullable().default(null),
     }),
   ),
   /** Regular-season matchups by draft slot (1-based); away null = bye. */
@@ -167,7 +177,7 @@ export const EspnSnapshotSchema = z.object({
   weeks: z.array(z.object({ period: z.number().int(), start: z.string(), end: z.string() })).default([]),
   /** The draft, only when the sync was asked for it (first-time setup). */
   draft: z.array(EspnDraftPickSchema).default([]),
-  /** Actual stats of rostered players and the top free agents (stand-ins for players without a projection). */
+  /** Actual stats of rostered players and the top free agents and waiver players (with their waiver status). */
   playerStats: z.array(EspnPlayerStatsSchema).default([]),
 })
 export type EspnSnapshot = z.infer<typeof EspnSnapshotSchema>
@@ -206,6 +216,8 @@ interface RawTeam {
   abbrev?: string
   roster?: { entries?: RawEntry[] }
   owners?: string[]
+  waiverRank?: number
+  transactionCounter?: { matchupAcquisitionTotals?: Record<string, number> }
   playoffSeed?: number
   record?: { overall?: { wins?: number; losses?: number; ties?: number } }
 }
@@ -262,6 +274,9 @@ export function playerStatsOf(p: RawPlayer, seasonId: number, codes: ReadonlyMap
     season: statLineOf(p, seasonId, 0),
     recent: statLineOf(p, seasonId, 2),
     prior: statLineOf(p, seasonId - 1, 0),
+    available: false,
+    waiverClears: null,
+    injuryStatus: null,
   }
 }
 
@@ -368,8 +383,8 @@ export interface SnapshotOptions {
   swid?: string | null
   /** ESPN player id → name and pro team, for drafted players no longer on a roster; given only when the draft is wanted. */
   players?: ReadonlyMap<number, { name: string; proTeamId: number | null }>
-  /** Raw free agents from ESPN's player list (`kona_player_info`), for their stats. */
-  freeAgents?: readonly { player?: RawPlayer }[]
+  /** Raw free agents and waiver players from ESPN's player list (`kona_player_info`), for their stats and waiver status. */
+  freeAgents?: readonly { player?: RawPlayer; status?: string; waiverProcessDate?: number }[]
 }
 
 /** Raw ESPN league JSON (views mTeam, mRoster, mSettings, mMatchup, mDraftDetail) + proTeams → snapshot. Throws on a shape it can't read. */
@@ -393,7 +408,8 @@ export function snapshotFromEspn(rawLeague: unknown, rawProTeams: unknown, fetch
         injuryStatus: p.injuryStatus ?? null,
       }
     })
-    return { espnId: t.id!, slot, name, abbrev: t.abbrev ?? '', roster }
+    const pickups = league.status?.currentMatchupPeriod != null ? t.transactionCounter?.matchupAcquisitionTotals?.[league.status.currentMatchupPeriod] : undefined
+    return { espnId: t.id!, slot, name, abbrev: t.abbrev ?? '', roster, waiverRank: t.waiverRank ?? null, pickups: pickups ?? (t.transactionCounter ? 0 : null) }
   })
   const regularSeasonPeriods = league.settings?.scheduleSettings?.matchupPeriodCount ?? 0
   const schedule = (league.schedule ?? [])
@@ -482,12 +498,14 @@ export function snapshotFromEspn(rawLeague: unknown, rawProTeams: unknown, fetch
   const gameDates = ((rawProTeams as RawProTeams)?.games ?? []).map((g) => nbaDate(g.start))
   const statsSeason = league.seasonId ?? 0
   const seen = new Set<number>()
+  const onWaivers = (f: { status?: string; waiverProcessDate?: number }) => (f.status === 'WAIVERS' && f.waiverProcessDate ? new Date(f.waiverProcessDate).toISOString() : null)
   const playerStats = [
-    ...league.teams.flatMap((t) => (t.roster?.entries ?? []).map((e) => e.playerPoolEntry?.player)),
-    ...(opts.freeAgents ?? []).map((f) => f.player),
-  ]
-    .map((p) => (p ? playerStatsOf(p, statsSeason, codes) : null))
-    .filter((p): p is EspnPlayerStats => p != null && !seen.has(p.espnId) && !!seen.add(p.espnId))
+    ...league.teams.flatMap((t) => (t.roster?.entries ?? []).map((e) => (e.playerPoolEntry?.player ? playerStatsOf(e.playerPoolEntry.player, statsSeason, codes) : null))),
+    ...(opts.freeAgents ?? []).map((f) => {
+      const s = f.player ? playerStatsOf(f.player, statsSeason, codes) : null
+      return s && { ...s, available: true, waiverClears: onWaivers(f), injuryStatus: f.player?.injuryStatus ?? null }
+    }),
+  ].filter((p): p is EspnPlayerStats => p != null && !seen.has(p.espnId) && !!seen.add(p.espnId))
   return EspnSnapshotSchema.parse({
     kind: 'espn-league',
     fetchedAt,

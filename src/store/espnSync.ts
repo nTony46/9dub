@@ -48,7 +48,7 @@ export interface EspnPlan {
   unmatched: string[]
   /** ESPN's lineup when it differs from 9dub's (null = unchanged). */
   lineup: { slots: string[]; ir: number } | null
-  /** Actual stats of the players in `needsStats` that ESPN returned. */
+  /** Actual stats of the players in `needsStats` and of every free agent and waiver player ESPN listed. */
   stats: EspnSync['stats']
 }
 
@@ -66,7 +66,7 @@ export interface EspnPlanInput {
   lastEspnNames?: readonly string[]
   lineupSlots?: readonly string[]
   irSlots?: number
-  /** Players whose stats to keep (those without a projection); all matched players when omitted. */
+  /** Rostered players whose stats to keep (those without a projection; free agents' are always kept); all matched players when omitted. */
   needsStats?: ReadonlySet<string>
 }
 
@@ -170,8 +170,17 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
   const stats: EspnSync['stats'] = {}
   for (const p of snap.playerStats) {
     const id = matchStats(p.name, p.nbaTeam)
-    if (!id || (input.needsStats && !input.needsStats.has(id))) continue
-    stats[id] = { team: p.nbaTeam, positions: p.positions, season: p.season, recent: p.recent, prior: p.prior }
+    if (!id || (input.needsStats && !input.needsStats.has(id) && !p.available)) continue
+    stats[id] = {
+      team: p.nbaTeam,
+      positions: p.positions,
+      season: p.season,
+      recent: p.recent,
+      prior: p.prior,
+      available: p.available,
+      waiverClears: p.waiverClears,
+      injuryStatus: p.injuryStatus,
+    }
   }
 
   return {

@@ -12,7 +12,7 @@ It's built for H2H each-category leagues: FG%, FT%, 3PM, PTS, REB, AST, STL, BLK
 - **Recommendations you can follow.** Three lanes (best decision, best overall, best fit) with plain-language reasons. The valuation is transparent: FG% and FT% are weighted by shooting volume, and turnovers count against you.
 - **Build analysis.** See where your team stands in each category, test punt builds, and compare players before you take them.
 - **League overview.** Every roster as team cards or a teams × categories heatmap.
-- **Season matchups.** Weekly projections, both teams' games day by day, which categories to chase or let go, the pickups that move them, and a trade lab.
+- **Season matchups.** Weekly projections, both teams' games day by day, which categories to chase or let go, a waiver wire ranked by games and the categories you're after, and a trade lab.
 
 ## Quick start
 

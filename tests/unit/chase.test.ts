@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bestPerCategory, chaseVerdict, outlookOf, rankPickups, subtractTotals } from '@/analytics/chase'
+import { bestPerCategory, chaseVerdict, defaultTargets, outlookOf, pickupDeltas, rankPickups, subtractTotals, targetFit } from '@/analytics/chase'
 import { compareWeek, countVariance, weekTotals, type WeekTotals } from '@/analytics/matchup'
 
 const t = (o: Partial<Omit<WeekTotals, 'fgPct' | 'ftPct'>> = {}): WeekTotals =>
@@ -59,5 +59,27 @@ describe('chasing a category', () => {
     expect(best.REB?.id).toBe('big')
     expect(best.REB?.add).toBe(25)
     expect(subtractTotals(me, restMe).reb).toBe(60)
+  })
+})
+
+describe('waiver wire targets', () => {
+  it('starts with every category not clearly won, except ones out of reach', () => {
+    // Way ahead in PTS and 3PM, close in REB, far behind in BLK.
+    const w = compareWeek(t({ pts: 600, tpm: 80, reb: 160, blk: 5 }), t({ reb: 166, blk: 40 }))
+    const targets = defaultTargets(w)
+    expect(targets).toContain('REB')
+    expect(targets).not.toContain('PTS')
+    expect(targets).not.toContain('3PM')
+    expect(targets).not.toContain('BLK')
+  })
+
+  it('ranks by what a pickup adds to the targets, in noise units, with fewer turnovers as help', () => {
+    const base = compareWeek(t(), t())
+    const rebounder = { call: compareWeek(t({ reb: 175, tov: 54 }), t()) }
+    const guard = { call: compareWeek(t({ ast: 100, tov: 48 }), t()) }
+    expect(pickupDeltas(base, rebounder)).toMatchObject({ REB: 15, TO: 4, AST: 0 })
+    expect(targetFit(base, rebounder, ['REB'])).toBeGreaterThan(targetFit(base, guard, ['REB']))
+    expect(targetFit(base, guard, ['AST', 'TO'])).toBeGreaterThan(targetFit(base, rebounder, ['AST', 'TO']))
+    expect(targetFit(base, rebounder, ['TO'])).toBeLessThan(0)
   })
 })

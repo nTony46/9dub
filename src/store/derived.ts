@@ -198,18 +198,18 @@ const projectedCount = (d: DatasetSnapshot) => d.players.reduce((n, r) => n + (r
  * unchanged: only the identity fields shown and scheduled are swapped.
  * Players without a projection that ESPN has stats for (rostered, or near the
  * top of free agency) get a stand-in line for weekly matchups, and free
- * agents among them ESPN's team and eligibility too.
+ * agents ESPN listed take its team and eligibility too.
  */
 const withEspn = memoOne((engine: EngineData, espn: EspnSync['players'] | undefined, stats: EspnSync['stats'] | undefined): EngineData => {
   if ((!espn || !Object.keys(espn).length) && (!stats || !Object.keys(stats).length)) return engine
   const typical = typicalLine(engine)
   const players = engine.players.map((p) => {
     const e = espn?.[p.id]
-    const st = !p.line ? stats?.[p.id] : undefined
-    if (!e && !st) return p
-    const team = e ? (e.team ?? p.team) : (st?.team ?? p.team)
-    const positions = e?.positions.length ? e.positions : st?.positions.length ? st.positions : p.positions
-    return { ...p, team, positions, standIn: st ? standInLine(st.season, st.recent, st.prior, typical) : null }
+    const s = stats?.[p.id]
+    if (!e && !s) return p
+    const team = e ? (e.team ?? p.team) : (s?.team ?? p.team)
+    const positions = e?.positions.length ? e.positions : s?.positions.length ? s.positions : p.positions
+    return { ...p, team, positions, standIn: s && !p.line ? standInLine(s.season, s.recent, s.prior, typical) : null }
   })
   return { ...engine, players, byId: new Map(players.map((p) => [p.id, p])) }
 })

@@ -32,6 +32,7 @@ export function WeekGrid({
   index,
   from,
   started,
+  onTeam,
 }: {
   me: SideProjection
   them: SideProjection
@@ -43,6 +44,8 @@ export function WeekGrid({
   from: string
   /** NBA teams whose game on `from` had started at the last ESPN sync. */
   started?: ReadonlySet<string>
+  /** A team in "Fill the empty seats" was picked (to see its free agents). */
+  onTeam?: (team: string) => void
 }) {
   const [who, setWho] = useState<'me' | 'them'>('me')
   const [legend, setLegend] = useState(false)
@@ -258,7 +261,7 @@ export function WeekGrid({
                 </tr>
               )
             })}
-            {who === 'me' ? <StreamingRows days={me.days} index={index} from={from} started={started} /> : null}
+            {who === 'me' ? <StreamingRows days={me.days} index={index} from={from} started={started} onTeam={onTeam} /> : null}
           </tbody>
         </table>
       </div>
@@ -293,7 +296,19 @@ const STREAM_ROWS = 8
  * position adds a start, muted when the night is already full or the game has
  * started.
  */
-function StreamingRows({ days, index, from, started }: { days: SideProjection['days']; index: ScheduleIndex; from: string; started?: ReadonlySet<string> }) {
+function StreamingRows({
+  days,
+  index,
+  from,
+  started,
+  onTeam,
+}: {
+  days: SideProjection['days']
+  index: ScheduleIndex
+  from: string
+  started?: ReadonlySet<string>
+  onTeam?: (team: string) => void
+}) {
   const [mode, setMode] = useState<'open' | 'b2b'>('open')
   const [all, setAll] = useState(false)
   const fits = useMemo(() => {
@@ -350,8 +365,14 @@ function StreamingRows({ days, index, from, started }: { days: SideProjection['d
             <tr key={f.team} data-testid="stream-team">
               <td className="sticky left-0 z-10 h-[52px] border-t border-seam bg-floor pr-2">
                 <div className="flex items-center gap-2">
-                  <Tip content={CITY[f.team] ?? f.team}>
-                    <span className="font-mono text-[13.5px] font-semibold">{f.team}</span>
+                  <Tip content={onTeam ? `${CITY[f.team] ?? f.team}: see its players on the waiver wire` : (CITY[f.team] ?? f.team)}>
+                    {onTeam ? (
+                      <button type="button" onClick={() => onTeam(f.team)} className="font-mono text-[13.5px] font-semibold hover:text-clock hover:underline">
+                        {f.team}
+                      </button>
+                    ) : (
+                      <span className="font-mono text-[13.5px] font-semibold">{f.team}</span>
+                    )}
                   </Tip>
                   <span className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
                     {f.b2b.length ? <span className="rounded bg-clock-soft px-1 py-px text-[11px] font-semibold text-clock">B2B</span> : null}

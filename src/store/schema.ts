@@ -148,7 +148,11 @@ export const EspnSyncSchema = z.object({
   results: z.array(EspnResultSchema).default([]),
   /** Season records in categories and places, as ESPN's standings have them. */
   standings: z.array(EspnStandingSchema).default([]),
-  /** Actual stats of players your data has no projection for (rostered, or near the top of free agency): their stand-in lines. */
+  /**
+   * Actual stats of players your data has no projection for (their stand-in
+   * lines) and of every free agent and waiver player ESPN listed (the waiver
+   * wire), with their waiver status.
+   */
   stats: z
     .record(
       z.string(),
@@ -158,9 +162,17 @@ export const EspnSyncSchema = z.object({
         season: EspnStatLineSchema.nullable(),
         recent: EspnStatLineSchema.nullable(),
         prior: EspnStatLineSchema.nullable(),
+        /** On no roster at this sync (a free agent, or on waivers). */
+        available: z.boolean().default(false),
+        /** On waivers until this moment (ISO). */
+        waiverClears: z.string().nullable().default(null),
+        /** ESPN's injury designation for a player on no roster. */
+        injuryStatus: z.string().nullable().default(null),
       }),
     )
     .default({}),
+  /** Each team's waiver priority (1 = first claim) and pickups in the matchup in progress, by draft slot (1-based). */
+  teamStatus: z.array(z.object({ slot: z.number().int(), waiverRank: z.number().int().nullable(), pickups: z.number().int().nullable() })).default([]),
 })
 export type EspnSync = z.infer<typeof EspnSyncSchema>
 

@@ -128,13 +128,14 @@ async function playerNames(auth: EspnAuth, season: number, ids: number[]): Promi
   return out
 }
 
-const FREE_AGENT_TTL_MS = 60 * 60 * 1000
+/** Shorter than the app's 15-minute sync, so each sync sees fresh drops and waiver clear times. */
+const FREE_AGENT_TTL_MS = 10 * 60 * 1000
 /** How many free agents (by % rostered) to read stats for. */
 const FREE_AGENT_LIMIT = 100
 
 /**
- * The most-rostered free agents with their actual stats (this season, last 15 days, last season),
- * for stand-in lines when a player has no projection. Cached an hour; an error here never fails a sync.
+ * The most-rostered free agents and players on waivers, with their actual stats (this season, last 15
+ * days, last season) and when a waiver claim clears. Cached 10 minutes; an error here never fails a sync.
  */
 async function freeAgents(root: string, auth: EspnAuth, season: number): Promise<{ player?: unknown }[]> {
   const file = join(dir(root), CACHE_DIR, `free-agents-${auth.leagueId}-${season}.json`)
@@ -150,10 +151,18 @@ async function freeAgents(root: string, auth: EspnAuth, season: number): Promise
   })
   try {
     const j = (await espnRead(`${ESPN_READ_BASE}/seasons/${season}/segments/0/leagues/${auth.leagueId}?view=kona_player_info`, auth, { 'x-fantasy-filter': filter })) as {
-      players?: { player?: { id?: number; fullName?: string; proTeamId?: number; eligibleSlots?: number[]; stats?: unknown } }[]
+      players?: {
+        status?: string
+        waiverProcessDate?: number
+        player?: { id?: number; fullName?: string; proTeamId?: number; eligibleSlots?: number[]; injuryStatus?: string; stats?: unknown }
+      }[]
     }
-    // Kept: identity, team, eligibility and stats.
-    const slim = (j.players ?? []).map(({ player: p }) => ({ player: p && { id: p.id, fullName: p.fullName, proTeamId: p.proTeamId, eligibleSlots: p.eligibleSlots, stats: p.stats } }))
+    // Kept: identity, team, eligibility, injury tag, stats, and waiver status.
+    const slim = (j.players ?? []).map(({ status, waiverProcessDate, player: p }) => ({
+      status,
+      waiverProcessDate,
+      player: p && { id: p.id, fullName: p.fullName, proTeamId: p.proTeamId, eligibleSlots: p.eligibleSlots, injuryStatus: p.injuryStatus, stats: p.stats },
+    }))
     mkdirSync(join(dir(root), CACHE_DIR), { recursive: true })
     writeFileSync(file, JSON.stringify(slim), { mode: 0o600 })
     return slim

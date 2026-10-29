@@ -81,10 +81,22 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(detail).toContainText('Test Squad vs Team 2')
   await expect(page.getByTestId('matchup-score')).toHaveText(/^\d–\d(–\d)?$/)
   await expect(page.getByTestId('matchup-categories')).toContainText('STL')
-  // Outlook per category, and pickups for the rest of the week.
+  // Outlook per category, and the waiver wire for the rest of the week.
   await expect(page.getByTestId('matchup-categories')).toContainText('Outlook')
   await expect(page.getByTestId('outlook-PTS')).toHaveText(/Safe|Ahead|Toss-up|Behind|Far behind/)
-  await expect(page.getByTestId('pickups')).toBeVisible()
+  const wire = page.getByTestId('waiver-wire')
+  await expect(wire.getByTestId('wire-row').first()).toBeVisible()
+  // Pick the categories: one column each.
+  const reb = wire.getByRole('group', { name: 'Categories you’re after' }).getByRole('button', { name: 'REB', exact: true })
+  const wasOn = (await reb.getAttribute('aria-pressed')) === 'true'
+  await reb.click()
+  await expect(reb).toHaveAttribute('aria-pressed', wasOn ? 'false' : 'true')
+  const rebColumn = wire.locator('thead').getByRole('button', { name: 'REB', exact: true })
+  await expect(rebColumn).toHaveCount(wasOn ? 0 : 1)
+  // Sort by games: most starts first.
+  await wire.getByRole('button', { name: 'Games' }).click()
+  const games = await wire.getByTestId('wire-row').locator('td:nth-child(2) span.font-mono').allInnerTexts()
+  expect(games.map(Number)).toEqual([...games.map(Number)].sort((a, b) => b - a))
 
   // Week view (default): players × days, open seats, and NBA teams to stream from.
   const grid = page.getByTestId('week-grid')
@@ -106,6 +118,14 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(page.getByTestId('stream-team')).toHaveCount(8)
   await page.getByRole('radio', { name: 'Back-to-backs' }).click()
   await expect(page.getByTestId('stream-team').first()).toContainText('B2B')
+  // A team here filters the waiver wire to its players.
+  const streamTeam = page.getByTestId('stream-team').first().locator('button').first()
+  const code = (await streamTeam.innerText()).trim()
+  await streamTeam.click()
+  await expect(wire.getByTestId('wire-team')).toHaveText(code)
+  for (const row of await wire.getByTestId('wire-row').all()) await expect(row.locator('td').first()).toContainText(code)
+  await wire.getByTestId('wire-team').click()
+  await expect(wire.getByTestId('wire-team')).toHaveCount(0)
 
   // Daily lineups by slot (auto "quick lineup"): every player plays every day here.
   await page.getByRole('radio', { name: 'Day by slot' }).click()
