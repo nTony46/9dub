@@ -15,7 +15,21 @@ import { teamLabel, useEngine, useLineupSlots, type EngineData } from '@/store/d
 import { currentWeek, todayIso } from '@/store/season'
 import type { LeagueSeed, MatchupWeek } from '@/store/schema'
 import { FinalDetail, MatchupDetail } from './MatchupDetail'
-import { finalFor, liveFor, opponentName, projectWeek, rangeText, useCurrentRosters, useInjuries, useScheduleIndex, useWirePlacement, type ProjectionOptions } from './model'
+import {
+  finalFor,
+  liveFor,
+  opponentName,
+  pendingWindows,
+  projectWeek,
+  rangeText,
+  rostersForWeek,
+  useCurrentRosters,
+  useInjuries,
+  usePendingMoves,
+  useScheduleIndex,
+  useWirePlacement,
+  type ProjectionOptions,
+} from './model'
 
 export function MatchupsView() {
   const engine = useEngine()
@@ -27,7 +41,10 @@ export function MatchupsView() {
   const injuries = useInjuries()
   const [availability, setAvailability] = useState(settings.valuationBasis === 'gpAware')
   const slots = useLineupSlots()
-  const opts = useMemo<ProjectionOptions>(() => ({ availability, injuries, slots }), [availability, injuries, slots])
+  // Moves ESPN has queued for tomorrow: rosters already show them; today still counts the old ones.
+  const pending = usePendingMoves()
+  const windows = useMemo(() => pendingWindows(pending), [pending])
+  const opts = useMemo<ProjectionOptions>(() => ({ availability, injuries, slots, windows }), [availability, injuries, slots, windows])
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [mapping, setMapping] = useState(false)
@@ -58,9 +75,13 @@ export function MatchupsView() {
     return new Map(
       sorted
         .filter((w) => w.opponent != null && w.opponent < rosters.length && !finals.has(w.id))
-        .map((w) => [w.id, projectWeek(engine, index, rosters[me], rosters[w.opponent!], w.start, w.end, opts, liveFor(espnLive, sorted.indexOf(w) + 1, me, w.opponent))]),
+        .map((w) => {
+          const r = rostersForWeek(rosters, pending, w.start)
+          return [w.id, projectWeek(engine, index, r[me], r[w.opponent!], w.start, w.end, opts, liveFor(espnLive, sorted.indexOf(w) + 1, me, w.opponent))]
+        }),
     )
-  }, [engine, index, me, sorted, rosters, opts, espnLive, finals])
+  }, [engine, index, me, sorted, rosters, pending, opts, espnLive, finals])
+  const weekRosters = useMemo(() => (week ? rostersForWeek(rosters, pending, week.start) : rosters), [rosters, pending, week])
 
   // Docked waiver wire: its own column on the left, filled by the matchup below (a portal keeps its state there).
   const docked = useWirePlacement() === 'dock'
@@ -130,7 +151,7 @@ export function MatchupsView() {
                 weeks={sorted}
                 engine={engine}
                 index={index}
-                rosters={rosters}
+                rosters={weekRosters}
                 teamOf={teamOf}
                 me={me}
                 opts={opts}

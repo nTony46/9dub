@@ -5,7 +5,7 @@ import { EspnSnapshotSchema, espnSeasonId, localDate, matchupWeeks, nbaScheduleF
 import { datesBetween, NbaScheduleSchema } from '@/data/schedule'
 import { currentSeason } from '@/data/seasonLabel'
 import { ESPN_IR_NOTE, planEspnDraft, planEspnSync, type EspnPlanInput } from '@/store/espnSync'
-import { finalFor, liveFor } from '@/features/season/model'
+import { finalFor, liveFor, pendingWindows, rostersForWeek } from '@/features/season/model'
 import { ESPN_FAN_BASE, ESPN_READ_BASE, espnRead } from '../../scripts/espn'
 
 const entry = (playerId: number, fullName: string, proTeamId: number, lineupSlotId: number, eligibleSlots: number[], injuryStatus = 'ACTIVE') => ({
@@ -213,6 +213,72 @@ describe('planEspnSync', () => {
     const plan = planEspnSync(snap, { ...base, records: records.filter((r) => r.id !== 'brunson') })
     if ('error' in plan) throw new Error(plan.error)
     expect(plan.unmatched).toEqual(['Jalen Brunson (Second Pick)'])
+  })
+})
+
+describe('moves ESPN has queued for tomorrow', () => {
+  // Today is scoring period 2 (the first game day, Oct 21 in ET, is period 1). ESPN shows tomorrow's
+  // rosters (period 3, Oct 23) with Embiid added to First Pick and Brunson dropped by Second Pick.
+  const league = { ...rawLeague, scoringPeriodId: 2, status: { currentMatchupPeriod: 1, firstScoringPeriod: 1 } }
+  const next = {
+    scoringPeriodId: 3,
+    teams: [
+      { id: 3, roster: { entries: [entry(31, 'Ja Morant', 29, 13, [0, 5, 11, 12, 13], 'OUT')] } },
+      { id: 7, roster: { entries: [entry(70, 'Nikola Jokić', 7, 4, [4, 9, 10, 11, 12, 13]), entry(80, 'Joel Embiid', 7, 12, [4, 11, 12, 13])] } },
+    ],
+  }
+  const snap = snapshotFromEspn(league, rawPro, FETCHED, { next })
+  const records = [
+    { id: 'jokic', fullName: 'Nikola Jokic', aliases: [], nbaTeam: 'DEN' },
+    { id: 'brunson', fullName: 'Jalen Brunson', aliases: [], nbaTeam: 'NYK' },
+    { id: 'morant', fullName: 'Ja Morant', aliases: [], nbaTeam: 'MEM' },
+    { id: 'embiid', fullName: 'Joel Embiid', aliases: [], nbaTeam: 'DEN' },
+  ]
+  const input: EspnPlanInput = {
+    records,
+    draftRosters: [['jokic'], ['brunson', 'morant']],
+    moves: [],
+    injuries: [],
+    teamNames: ['First Pick', 'Second Pick'],
+    teams: 2,
+    userSlot: 1,
+    weeks: [],
+    today: '2026-10-22',
+  }
+
+  it('keeps tomorrow’s rosters and the date they take effect', () => {
+    expect(snap.nextDate).toBe('2026-10-23')
+    expect(snap.teams[0].next?.map((e) => e.name)).toEqual(['Nikola Jokić', 'Joel Embiid'])
+    expect(snap.teams[1].roster.map((e) => e.name)).toEqual(['Jalen Brunson', 'Ja Morant'])
+    expect(snapshotFromEspn(rawLeague, rawPro, FETCHED).nextDate).toBeNull()
+  })
+
+  it('makes the queued moves on the rosters, and lists who joins and who leaves', () => {
+    const plan = planEspnSync(snap, input)
+    if ('error' in plan) throw new Error(plan.error)
+    expect(plan.moves).toEqual([
+      { playerId: 'brunson', from: 1, to: null },
+      { playerId: 'embiid', from: null, to: 0 },
+    ])
+    expect(plan.pending).toEqual({ date: '2026-10-23', joining: ['embiid'], leaving: [{ playerId: 'brunson', team: 1 }] })
+    expect(plan.changes).toContain('Second Pick dropped Jalen Brunson (from Fri, Oct 23)')
+    expect(plan.changes).toContain('First Pick added Joel Embiid (from Fri, Oct 23)')
+  })
+
+  it('counts the old roster until the move’s day, and the new one from then', () => {
+    const plan = planEspnSync(snap, input)
+    if ('error' in plan || !plan.pending) throw new Error('no plan')
+    const rosters = [['jokic', 'embiid'], ['morant']]
+    // The week in progress still has Brunson (through today); a later week doesn't.
+    expect(rostersForWeek(rosters, plan.pending, '2026-10-20')).toEqual([['jokic', 'embiid'], ['morant', 'brunson']])
+    expect(rostersForWeek(rosters, plan.pending, '2026-10-26')).toBe(rosters)
+    expect(pendingWindows(plan.pending)).toEqual(
+      new Map([
+        ['brunson', { until: '2026-10-22' }],
+        ['embiid', { from: '2026-10-23' }],
+      ]),
+    )
+    expect(pendingWindows(null)).toBeUndefined()
   })
 })
 

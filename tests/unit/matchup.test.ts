@@ -48,6 +48,17 @@ describe('weekly matchup projection', () => {
     expect(side.totals.pts).toBeCloseTo(30) // the no-volume player still adds counting stats
   })
 
+  it('counts a player only on the days he is on the roster (a move ESPN has queued)', () => {
+    const dates = ['2026-10-20', '2026-10-21', '2026-10-22']
+    const side = projectSide([player('in', 'BOS', ['PG'], 1, { from: '2026-10-21' }), player('out', 'NYK', ['SG'], 2, { until: '2026-10-20' })], dates, everyone)
+    expect(side.players.get('in')!.games).toBe(2)
+    expect(side.players.get('out')!.games).toBe(1)
+    // Off the roster he isn't listed at all, not even as out.
+    expect(side.days[0].out).toEqual([])
+    expect([...side.days[0].bench, ...side.days[0].started]).not.toContain('in')
+    expect(side.days[1].started).toEqual(['in'])
+  })
+
   it('scales by availability and ignores players without a projection', () => {
     const side = projectSide([player('a', 'BOS', ['PG'], 1, { availability: 0.5 }), player('x', 'BOS', ['SG'], 2, { line: null })], ['2026-10-20', '2026-10-21'], everyone)
     expect(side.totals.pts).toBeCloseTo(10)

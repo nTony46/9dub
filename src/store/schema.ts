@@ -175,6 +175,15 @@ export const EspnSyncSchema = z.object({
     .default({}),
   /** Each team's waiver priority (1 = first claim) and pickups in the matchup in progress, by draft slot (1-based). */
   teamStatus: z.array(z.object({ slot: z.number().int(), waiverRank: z.number().int().nullable(), pickups: z.number().int().nullable() })).default([]),
+  /**
+   * Moves ESPN has queued for `date` (tomorrow at the sync): rosters already
+   * show them; until then the players joining don't count yet and the ones
+   * leaving (team = 0-based slot) still do.
+   */
+  pending: z
+    .object({ date: IsoDate, joining: z.array(z.string()), leaving: z.array(z.object({ playerId: z.string(), team: z.number().int().min(0) })) })
+    .nullable()
+    .default(null),
 })
 export type EspnSync = z.infer<typeof EspnSyncSchema>
 

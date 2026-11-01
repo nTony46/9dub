@@ -748,6 +748,7 @@ export const useApp = create<AppState>()((set, get) => {
               standings: snap.standings,
               stats: plan.stats,
               teamStatus: snap.teams.map((t) => ({ slot: t.slot, waiverRank: t.waiverRank, pickups: t.pickups })),
+              pending: plan.pending,
             },
           },
           espnSyncing: false,

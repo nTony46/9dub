@@ -57,7 +57,7 @@ After the last pick, *Live Draft* becomes **My League**, the app opens there, an
 
 The draft-only tools are hidden, and `/` now searches **NBA Players** (`5`).
 
-**ESPN sync.** Connect on the setup page or in *Settings & Data → League → ESPN league*. If you have several leagues, pick one there. The refresh button in the top bar re-reads ESPN. The app also syncs on start-up (if the last sync is over 10 minutes old) and every 15 minutes while the tab is open. A sync updates team names, rosters, IR, injury tags, opponents, live category totals for the current week, final scores and standings. It only ever reads. See [DATA_SOURCES.md](DATA_SOURCES.md#espn-league-sync-read-only) for exactly what it reads.
+**ESPN sync.** Connect on the setup page or in *Settings & Data → League → ESPN league*. If you have several leagues, pick one there. The refresh button in the top bar re-reads ESPN. The app also syncs on start-up (if the last sync is over 10 minutes old) and every 15 minutes while the tab is open. A sync updates team names, rosters, IR, injury tags, opponents, live category totals for the current week, final scores and standings. Rosters include moves ESPN has queued for tomorrow, such as an add after games locked, so next week's preview shows them. The week in progress still counts today's roster for today. It only ever reads. See [DATA_SOURCES.md](DATA_SOURCES.md#espn-league-sync-read-only) for exactly what it reads.
 
 ## Season
 

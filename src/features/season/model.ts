@@ -68,6 +68,8 @@ export interface ProjectionOptions {
   injuries?: ReadonlyMap<string, string | null>
   /** The league's lineup (default: ESPN's standard slots). */
   slots?: readonly SlotDef[]
+  /** Player id → the days he's on his roster, for moves ESPN has queued (see `pendingWindows`). */
+  windows?: ReadonlyMap<string, { from?: string; until?: string }>
 }
 
 /**
@@ -93,8 +95,42 @@ export function matchupPlayers(ids: readonly string[], engine: EngineData, opts:
         priority: v ? (ctx.basis === 'gpAware' ? v.rankGp : v.rank) : 9999,
         availability: opts.availability && p.gp != null ? Math.min(1, p.gp / full) : 1,
         outThrough: opts.injuries?.has(p.id) ? (opts.injuries.get(p.id) ?? null) : undefined,
+        ...opts.windows?.get(p.id),
       }
     })
+}
+
+export type PendingMoves = NonNullable<EspnSync['pending']>
+
+/** The roster moves ESPN has queued for tomorrow, while they're still ahead (null once their day has come). */
+export function usePendingMoves(): PendingMoves | null {
+  const pending = useApp((s) => s.season.espn?.pending ?? null)
+  const today = todayIso()
+  return pending && pending.date > today ? pending : null
+}
+
+/**
+ * Roster windows for queued moves: a player joining counts from the move's
+ * date, one leaving through the day before. (A player moving between two
+ * teams counts for his new one only.)
+ */
+export function pendingWindows(p: PendingMoves | null): Map<string, { from?: string; until?: string }> | undefined {
+  if (!p) return undefined
+  const out = new Map<string, { from?: string; until?: string }>()
+  for (const l of p.leaving) out.set(l.playerId, { until: addDays(p.date, -1) })
+  for (const id of p.joining) out.set(id, { from: p.date })
+  return out
+}
+
+/** Rosters for a week that starts before the queued moves land: players leaving are still on them until then. */
+export function rostersForWeek(rosters: string[][], p: PendingMoves | null, start: string): string[][] {
+  if (!p || start >= p.date) return rosters
+  const moving = new Set(p.joining)
+  const leaving = p.leaving.filter((l) => !moving.has(l.playerId) && rosters[l.team] && !rosters[l.team].includes(l.playerId))
+  if (!leaving.length) return rosters
+  const out = rosters.map((r) => [...r])
+  for (const l of leaving) out[l.team].push(l.playerId)
+  return out
 }
 
 /** Where a player's weekly numbers come from when he has no projection: a short tag and a sentence (null = his projection). */

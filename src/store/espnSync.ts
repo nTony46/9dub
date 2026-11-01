@@ -50,6 +50,8 @@ export interface EspnPlan {
   lineup: { slots: string[]; ir: number } | null
   /** Actual stats of the players in `needsStats` and of every free agent and waiver player ESPN listed. */
   stats: EspnSync['stats']
+  /** Moves ESPN has queued for tomorrow (null = none). */
+  pending: EspnSync['pending']
 }
 
 export interface EspnPlanInput {
@@ -95,12 +97,13 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
   }
   const label = (slot: number | null) => (slot == null ? 'free agency' : nextNames[slot])
 
+  // Rosters as ESPN has them from tomorrow (when it said), so moves it has queued count as made.
   const target = new Map<string, number>()
   const onIr = new Set<string>()
   const players: Record<string, EspnPlayerInfo> = {}
   const unmatched: string[] = []
   for (const t of snap.teams) {
-    for (const e of t.roster) {
+    for (const e of t.next ?? t.roster) {
       const id = match(e.name, e.nbaTeam)
       if (!id) {
         unmatched.push(`${e.name} (${t.name})`)
@@ -111,6 +114,25 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
       players[id] = { team: e.nbaTeam, positions: e.positions, status: e.injuryStatus && e.injuryStatus !== 'ACTIVE' ? e.injuryStatus : null }
     }
   }
+
+  // Queued: on a team tomorrow but not today (joining), or the other way round (leaving).
+  const joining: string[] = []
+  const leaving: { playerId: string; team: number }[] = []
+  if (snap.nextDate) {
+    // One matcher per day's rosters (a matcher uses each record once).
+    const idsOf = (rosters: EspnSnapshot['teams'][number]['roster'][]) => {
+      const m = nameMatcher(input.records)
+      return rosters.map((r) => new Set(r.map((e) => m(e.name, e.nbaTeam)).filter((id): id is string => id != null)))
+    }
+    const today = idsOf(snap.teams.map((t) => t.roster))
+    const tomorrow = idsOf(snap.teams.map((t) => t.next ?? t.roster))
+    snap.teams.forEach((t, k) => {
+      for (const id of tomorrow[k]) if (!today[k].has(id)) joining.push(id)
+      for (const id of today[k]) if (!tomorrow[k].has(id)) leaving.push({ playerId: id, team: t.slot - 1 })
+    })
+  }
+  const queued = new Set([...joining, ...leaving.map((l) => l.playerId)])
+  const when = snap.nextDate ? ` (from ${new Date(`${snap.nextDate}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })})` : ''
 
   const { teamOf } = currentRosters(input.draftRosters, input.moves)
   const nameOf = new Map(input.records.map((r) => [r.id, r.fullName]))
@@ -124,7 +146,8 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
   moves.sort((a, b) => (a.to == null ? 0 : 1) - (b.to == null ? 0 : 1))
   for (const m of moves) {
     const who = nameOf.get(m.playerId) ?? m.playerId
-    changes.push(m.to == null ? `${label(m.from)} dropped ${who}` : m.from == null ? `${label(m.to)} added ${who}` : `${who}: ${label(m.from)} → ${label(m.to)}`)
+    const text = m.to == null ? `${label(m.from)} dropped ${who}` : m.from == null ? `${label(m.to)} added ${who}` : `${who}: ${label(m.from)} → ${label(m.to)}`
+    changes.push(queued.has(m.playerId) ? text + when : text)
   }
 
   const hurt = activeInjuries(input.injuries, input.today)
@@ -194,6 +217,7 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
     unmatched,
     lineup,
     stats,
+    pending: snap.nextDate && (joining.length || leaving.length) ? { date: snap.nextDate, joining, leaving } : null,
   }
 }
 

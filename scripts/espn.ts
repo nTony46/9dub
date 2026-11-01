@@ -196,7 +196,16 @@ export async function fetchEspnSnapshot(root: string, fallbackSeason: number, op
   const league = (await espnRead(`${ESPN_READ_BASE}/seasons/${season}/segments/0/leagues/${auth.leagueId}?${views}`, auth)) as {
     teams?: { roster?: { entries?: { playerId?: number }[] } }[]
     draftDetail?: { picks?: { playerId?: number }[] }
+    scoringPeriodId?: number
+    status?: { finalScoringPeriod?: number }
   }
+  // Tomorrow's rosters: a move ESPN has queued (an add after lock, or past the matchup's pickup limit) shows only there.
+  const today = league.scoringPeriodId
+  const final = league.status?.finalScoringPeriod
+  const next =
+    today != null && (final == null || today < final)
+      ? { scoringPeriodId: today + 1, ...((await espnRead(`${ESPN_READ_BASE}/seasons/${season}/segments/0/leagues/${auth.leagueId}?view=mRoster&scoringPeriodId=${today + 1}`, auth)) as object) }
+      : undefined
   let players: Map<number, { name: string; proTeamId: number | null }> | undefined
   if (opts.withDraft) {
     const rostered = new Set((league.teams ?? []).flatMap((t) => (t.roster?.entries ?? []).map((e) => e.playerId)))
@@ -207,6 +216,7 @@ export async function fetchEspnSnapshot(root: string, fallbackSeason: number, op
     swid: auth.swid,
     players,
     freeAgents: (await freeAgents(root, auth, season)) as SnapshotOptions['freeAgents'],
+    next: next as SnapshotOptions['next'],
   })
   const cache = join(dir(root), CACHE_DIR)
   mkdirSync(cache, { recursive: true })

@@ -32,10 +32,19 @@ export interface MatchupPlayer {
   availability?: number
   /** Marked out through this date (inclusive); null = until further notice; undefined = healthy. */
   outThrough?: string | null
+  /** On this roster from this date (a move ESPN has queued); undefined = already on it. */
+  from?: string
+  /** On this roster through this date (inclusive), then gone; undefined = staying. */
+  until?: string
 }
 
 export function isOutOn(p: Pick<MatchupPlayer, 'outThrough'>, date: string): boolean {
   return p.outThrough !== undefined && (p.outThrough === null || date <= p.outThrough)
+}
+
+/** Whether the player is on the roster that day at all (off it, he isn't listed, not even as out). */
+export function onRosterOn(p: Pick<MatchupPlayer, 'from' | 'until'>, date: string): boolean {
+  return (p.from == null || date >= p.from) && (p.until == null || date <= p.until)
 }
 
 export interface WeekTotals {
@@ -151,6 +160,7 @@ export function projectSide(
     const active: MatchupPlayer[] = []
     const idle: MatchupPlayer[] = []
     for (const p of ordered) {
+      if (!onRosterOn(p, date)) continue
       const hasGame = !!(teams && p.nbaTeam && teams.has(p.nbaTeam))
       if (isOutOn(p, date)) {
         day.out.push(p.id)
