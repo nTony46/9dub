@@ -59,6 +59,7 @@ export function HeadToHead({ profiles, me, engine }: { profiles: TeamProfile[]; 
   const settings = useApp((s) => s.settings)
   const weeks = useApp((s) => s.season.matchups)
   const espnLive = useApp((s) => s.season.espn?.live)
+  const lineups = useApp((s) => s.season.espn?.lineups ?? null)
   const index = useScheduleIndex()
   const slots = useLineupSlots()
   const { rosters } = useCurrentRosters()
@@ -67,7 +68,7 @@ export function HeadToHead({ profiles, me, engine }: { profiles: TeamProfile[]; 
   const rows = useMemo(() => {
     const sorted = [...weeks].sort((a, b) => a.start.localeCompare(b.start))
     const mine = profiles[me]
-    const opts = { availability: settings.valuationBasis === 'gpAware', injuries, slots }
+    const opts = { availability: settings.valuationBasis === 'gpAware', injuries, slots, lineups }
     return profiles
       .map((p, i) => {
         if (i === me) return null
@@ -94,7 +95,7 @@ export function HeadToHead({ profiles, me, engine }: { profiles: TeamProfile[]; 
       })
       .filter((r): r is NonNullable<typeof r> => r != null)
       .sort((a, b) => (a.next?.w.start ?? '9999').localeCompare(b.next?.w.start ?? '9999') || a.i - b.i)
-  }, [profiles, me, engine, weeks, today, index, rosters, injuries, espnLive, settings.valuationBasis, slots])
+  }, [profiles, me, engine, weeks, today, index, rosters, injuries, espnLive, lineups, settings.valuationBasis, slots])
 
   return (
     <div className="overflow-x-auto" data-testid="head-to-head">

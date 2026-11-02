@@ -14,7 +14,7 @@ import { teamLabel, useEngine, useLineupSlots, type EngineData } from '@/store/d
 import { ESPN_MOVE_NOTE } from '@/store/espnSync'
 import { irPlacement, todayIso } from '@/store/season'
 import { PlayerPicker } from './PlayerPicker'
-import { baseLineup, useCurrentRosters } from './model'
+import { baseLineup, espnSlotOn, useCurrentRosters } from './model'
 
 
 /** ESPN injury designations, short. */
@@ -144,6 +144,7 @@ function TeamRoster({
   const settings = useApp((s) => s.settings)
   const injuries = useApp((s) => s.season.injuries)
   const espn = useApp((s) => s.season.espn?.players)
+  const lineups = useApp((s) => s.season.espn?.lineups ?? null)
   const moveRosterPlayer = useApp((s) => s.moveRosterPlayer)
   const undoRosterMove = useApp((s) => s.undoRosterMove)
   const setInjury = useApp((s) => s.setInjury)
@@ -154,7 +155,8 @@ function TeamRoster({
   const place = irPlacement(roster, injuries, settings.irSlots, today)
   const slots = useLineupSlots()
   const starters = slots.filter((s) => s.starter).length
-  const rows = baseLineup(roster, engine, place.ir, settings.irSlots, Math.max(0, settings.rounds - starters), slots)
+  // Today's actual ESPN lineup when the sync has it, else the best lineup by value.
+  const rows = baseLineup(roster, engine, place.ir, settings.irSlots, Math.max(0, settings.rounds - starters), slots, lineups ? (id) => espnSlotOn(lineups, id, today) : undefined)
   const over = place.active.length - settings.rounds
   const name = (id: string) => engine.byId.get(id)?.name ?? id
 

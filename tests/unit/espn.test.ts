@@ -5,7 +5,7 @@ import { EspnSnapshotSchema, espnSeasonId, localDate, matchupWeeks, nbaScheduleF
 import { datesBetween, NbaScheduleSchema } from '@/data/schedule'
 import { currentSeason } from '@/data/seasonLabel'
 import { ESPN_IR_NOTE, planEspnDraft, planEspnSync, type EspnPlanInput } from '@/store/espnSync'
-import { finalFor, liveFor, pendingWindows, rostersForWeek } from '@/features/season/model'
+import { espnSlotOn, finalFor, liveFor, pendingWindows, rostersForWeek } from '@/features/season/model'
 import { ESPN_FAN_BASE, ESPN_READ_BASE, espnRead } from '../../scripts/espn'
 
 const entry = (playerId: number, fullName: string, proTeamId: number, lineupSlotId: number, eligibleSlots: number[], injuryStatus = 'ACTIVE') => ({
@@ -263,6 +263,21 @@ describe('moves ESPN has queued for tomorrow', () => {
     expect(plan.pending).toEqual({ date: '2026-10-23', joining: ['embiid'], leaving: [{ playerId: 'brunson', team: 1 }] })
     expect(plan.changes).toContain('Second Pick dropped Jalen Brunson (from Fri, Oct 23)')
     expect(plan.changes).toContain('First Pick added Joel Embiid (from Fri, Oct 23)')
+  })
+
+  it('keeps every player’s ESPN lineup slot today and tomorrow; later days follow tomorrow’s', () => {
+    const plan = planEspnSync(snap, input)
+    if ('error' in plan) throw new Error(plan.error)
+    expect(plan.lineups).toEqual({
+      date: '2026-10-22',
+      slots: { brunson: 'PG', morant: 'IR', jokic: 'C' },
+      nextDate: '2026-10-23',
+      next: { morant: 'IR', jokic: 'C', embiid: 'BE' },
+    })
+    expect(espnSlotOn(plan.lineups, 'brunson', '2026-10-21')).toBeUndefined() // before the sync day
+    expect(espnSlotOn(plan.lineups, 'brunson', '2026-10-22')).toBe('PG')
+    expect(espnSlotOn(plan.lineups, 'embiid', '2026-10-22')).toBeUndefined() // not on a roster yet
+    expect(espnSlotOn(plan.lineups, 'embiid', '2026-10-30')).toBe('BE')
   })
 
   it('counts the old roster until the move’s day, and the new one from then', () => {

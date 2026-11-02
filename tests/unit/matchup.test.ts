@@ -230,3 +230,31 @@ describe('stable daily lineup (moves off the bench)', () => {
     expect(day.lineup.find((s) => s.id === 'lillard')?.playing ?? false).toBe(false)
   })
 })
+
+describe('following the manager’s actual ESPN lineup', () => {
+  const any: Position[] = ['PG', 'SG', 'SF', 'PF', 'C']
+  // Eleven players for ten seats. ESPN starts the lowest-valued one (r11, at F) and benches the best (r1).
+  const espn: Record<string, string> = { r1: 'BE', r2: 'PG', r3: 'SG', r4: 'SF', r5: 'PF', r6: 'C', r7: 'G', r8: 'UTIL', r9: 'UTIL', r10: 'UTIL', r11: 'F' }
+  const roster = Array.from({ length: 11 }, (_, k) => player(`r${k + 1}`, k === 10 ? 'NYK' : 'BOS', any, k + 1, { slotOn: () => espn[`r${k + 1}`] }))
+  const playing = (d: string) => (d === '2026-11-02' ? new Set(['BOS', 'NYK']) : new Set(['BOS']))
+
+  it('starts who the manager starts, in his ESPN slot, even over a higher-valued bench player', () => {
+    const day = projectSide(roster, ['2026-11-02'], playing).days[0]
+    expect(day.started).toContain('r11')
+    expect(day.benched).toEqual(['r1'])
+    expect(day.lineup.find((s) => s.id === 'r11')?.slot).toBe('F')
+    expect(day.lineup[0]).toEqual({ slot: 'PG', id: 'r2', playing: true })
+  })
+
+  it('fills a seat a starter without a game leaves empty from the bench', () => {
+    const day = projectSide(roster, ['2026-11-03'], playing).days[0] // r11 (NYK) is idle
+    expect(day.started).toContain('r1')
+    expect(day.benched).toEqual([])
+    expect(day.lineup.find((s) => s.slot === 'F')?.id).toBe('r1')
+  })
+
+  it('without ESPN slots, the value order still decides', () => {
+    const plain = roster.map(({ slotOn: _, ...p }) => p)
+    expect(projectSide(plain, ['2026-11-02'], playing).days[0].benched).toEqual(['r11'])
+  })
+})

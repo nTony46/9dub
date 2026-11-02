@@ -36,6 +36,33 @@ export interface MatchupPlayer {
   from?: string
   /** On this roster through this date (inclusive), then gone; undefined = staying. */
   until?: string
+  /**
+   * His slot in the manager's actual lineup that day (PG … UTIL, BE, IR), from
+   * the ESPN sync; undefined = not known (the value order decides). Starters
+   * are seated before anyone else; bench players fill only seats left empty.
+   */
+  slotOn?: (date: string) => string | undefined
+}
+
+/** 0 = in a starting slot that day, 1 = not known, 2 = on the bench (BE or IR). */
+function lineupTier(p: Pick<MatchupPlayer, 'slotOn'>, date: string): number {
+  const s = p.slotOn?.(date)
+  return s == null ? 1 : s === 'BE' || s === 'IR' ? 2 : 0
+}
+
+/** Each player's starting slot that day in the manager's actual lineup (index into the starter slots; a repeated label like UTIL takes the next free one). */
+function espnHomes(players: readonly MatchupPlayer[], date: string, starters: readonly SlotDef[]): Map<string, number> {
+  const out = new Map<string, number>()
+  const taken = new Set<number>()
+  for (const p of players) {
+    const s = p.slotOn?.(date)
+    if (s == null || s === 'BE' || s === 'IR') continue
+    const i = starters.findIndex((x, k) => x.label === s && !taken.has(k))
+    if (i < 0) continue
+    taken.add(i)
+    out.set(p.id, i)
+  }
+  return out
 }
 
 export function isOutOn(p: Pick<MatchupPlayer, 'outThrough'>, date: string): boolean {
@@ -171,6 +198,11 @@ export function projectSide(
         idle.push(p)
       }
     }
+    // The manager's actual lineup that day, when the ESPN sync has it: his starters are seated first
+    // and shown in their own slots; bench players only fill seats a starter without a game leaves empty.
+    const espnDay = players.some((p) => p.slotOn?.(date) != null)
+    if (espnDay) active.sort((a, b) => lineupTier(a, date) - lineupTier(b, date) || a.priority - b.priority)
+    const dayHome = espnDay ? espnHomes(ordered, date, starters) : home
     const fill = fillLineup(
       active.map((p) => ({ id: p.id, positions: p.positions })),
       starters,
@@ -185,21 +217,21 @@ export function projectSide(
     // Display lineup, as on ESPN's roster page: the players who start (with a game) are placed first,
     // each in his usual slot where possible; bench players with a game move into slots whose usual
     // player has none. Players without a game then fill what's left, usual slot first.
-    const homeFirst = (a: MatchupPlayer, b: MatchupPlayer) => (home?.has(a.id) ? 0 : 1) - (home?.has(b.id) ? 0 : 1) || a.priority - b.priority
+    const homeFirst = (a: MatchupPlayer, b: MatchupPlayer) => (dayHome?.has(a.id) ? 0 : 1) - (dayHome?.has(b.id) ? 0 : 1) || a.priority - b.priority
     const owner = fillLineup(
       active
         .filter((p) => started.has(p.id))
         .sort(homeFirst)
         .map((p) => ({ id: p.id, positions: p.positions })),
       starters,
-      (id) => home?.get(id),
+      (id) => dayHome?.get(id),
     ).assignment
     // Players without a game only take seats that are still empty (usual seat first) — they never
     // push the players who are actually playing around.
     const fits = (i: number, p: MatchupPlayer) => owner[i] == null && (starters[i].accepts.length === 0 || starters[i].accepts.some((x) => p.positions.includes(x)))
     const waiting: MatchupPlayer[] = []
     for (const p of [...idle].sort(homeFirst)) {
-      const own = home?.get(p.id)
+      const own = dayHome?.get(p.id)
       if (own != null && own < starters.length && fits(own, p)) owner[own] = p.id
       else waiting.push(p)
     }

@@ -184,6 +184,15 @@ export const EspnSyncSchema = z.object({
     .object({ date: IsoDate, joining: z.array(z.string()), leaving: z.array(z.object({ playerId: z.string(), team: z.number().int().min(0) })) })
     .nullable()
     .default(null),
+  /**
+   * Every rostered player's ESPN lineup slot (PG … UTIL, BE, IR) on the day of
+   * the sync (`date`) and, when ESPN gave it, the next day. Later days use the
+   * last one: ESPN keeps a lineup until you change it.
+   */
+  lineups: z
+    .object({ date: IsoDate, slots: z.record(z.string(), z.string()), nextDate: IsoDate.nullable(), next: z.record(z.string(), z.string()).nullable() })
+    .nullable()
+    .default(null),
 })
 export type EspnSync = z.infer<typeof EspnSyncSchema>
 

@@ -1,6 +1,7 @@
 import type { Position } from '@/analytics/positions'
 import type { EspnDraftPick, EspnSnapshot } from '@/data/espn'
 import { normalizeName } from '@/data/normalize'
+import { addDays } from '@/data/schedule'
 import type { DatasetRecord } from '@/data/schema'
 import { teamForPick } from './draftLogic'
 import type { DraftPick, EspnSync, Injury, MatchupWeek, RosterMove } from './schema'
@@ -52,6 +53,8 @@ export interface EspnPlan {
   stats: EspnSync['stats']
   /** Moves ESPN has queued for tomorrow (null = none). */
   pending: EspnSync['pending']
+  /** Every rostered player's ESPN lineup slot today and tomorrow. */
+  lineups: EspnSync['lineups']
 }
 
 export interface EspnPlanInput {
@@ -206,6 +209,25 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
     }
   }
 
+  // Lineup slots as ESPN has them today and tomorrow (one matcher per day, as above).
+  const slotsOf = (day: 'roster' | 'next') => {
+    const m = nameMatcher(input.records)
+    const out: Record<string, string> = {}
+    for (const t of snap.teams)
+      for (const e of day === 'next' ? (t.next ?? []) : t.roster) {
+        const id = m(e.name, e.nbaTeam)
+        if (id) out[id] = e.lineupSlot
+      }
+    return out
+  }
+  const hasNext = !!snap.nextDate && snap.teams.some((t) => t.next)
+  const lineups: EspnSync['lineups'] = {
+    date: snap.nextDate ? addDays(snap.nextDate, -1) : input.today,
+    slots: slotsOf('roster'),
+    nextDate: hasNext ? snap.nextDate : null,
+    next: hasNext ? slotsOf('next') : null,
+  }
+
   return {
     moves,
     irAdd,
@@ -218,6 +240,7 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
     lineup,
     stats,
     pending: snap.nextDate && (joining.length || leaving.length) ? { date: snap.nextDate, joining, leaving } : null,
+    lineups,
   }
 }
 

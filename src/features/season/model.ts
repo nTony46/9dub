@@ -70,6 +70,19 @@ export interface ProjectionOptions {
   slots?: readonly SlotDef[]
   /** Player id → the days he's on his roster, for moves ESPN has queued (see `pendingWindows`). */
   windows?: ReadonlyMap<string, { from?: string; until?: string }>
+  /** Everyone's actual ESPN lineup slots from the last sync: the daily engine starts who the manager starts. */
+  lineups?: EspnSync['lineups']
+}
+
+/**
+ * A player's ESPN lineup slot on `date`: the sync day's lineup, then the next
+ * day's from that day on (ESPN carries a lineup forward until it's changed).
+ * Undefined before the sync day, or for a player ESPN didn't list.
+ */
+export function espnSlotOn(lineups: EspnSync['lineups'] | undefined, id: string, date: string): string | undefined {
+  if (!lineups || date < lineups.date) return undefined
+  if (lineups.next && lineups.nextDate && date >= lineups.nextDate) return lineups.next[id]
+  return lineups.slots[id]
 }
 
 /**
@@ -96,6 +109,7 @@ export function matchupPlayers(ids: readonly string[], engine: EngineData, opts:
         availability: opts.availability && p.gp != null ? Math.min(1, p.gp / full) : 1,
         outThrough: opts.injuries?.has(p.id) ? (opts.injuries.get(p.id) ?? null) : undefined,
         ...opts.windows?.get(p.id),
+        ...(opts.lineups ? { slotOn: (date: string) => espnSlotOn(opts.lineups, p.id, date) } : {}),
       }
     })
 }
@@ -364,7 +378,8 @@ export interface BaseRow {
 
 /**
  * One stable row per roster spot for the week view, like ESPN's roster page:
- * the best lineup by 9-cat value fills the starting slots, the rest sit on BE,
+ * the manager's actual ESPN lineup when the sync has it (`slotOf`), else the
+ * best lineup by 9-cat value, fills the starting slots; the rest sit on BE,
  * injured players fill IR. Day cells still show who actually plays each night.
  */
 export function baseLineup(
@@ -374,6 +389,7 @@ export function baseLineup(
   irSlots: number,
   benchSlots: number,
   slots: readonly SlotDef[] = ESPN_DEFAULT_SLOTS,
+  slotOf?: (id: string) => string | undefined,
 ): BaseRow[] {
   const starters = slots.filter((s) => s.starter)
   const onIr = new Set(ir)
@@ -382,10 +398,12 @@ export function baseLineup(
     return v ? (engine.ctx.basis === 'gpAware' ? v.rankGp : v.rank) : 9999
   }
   const active = roster.filter((id) => !onIr.has(id)).sort((a, b) => rank(a) - rank(b))
-  const fill = fillLineup(
-    active.map((id) => ({ id, positions: engine.byId.get(id)?.positions ?? [] })),
-    starters,
-  )
+  const fill = slotOf && active.some((id) => slotOf(id) != null)
+    ? espnFill(active, starters, slotOf)
+    : fillLineup(
+        active.map((id) => ({ id, positions: engine.byId.get(id)?.positions ?? [] })),
+        starters,
+      )
   const placed = new Set(fill.assignment.filter((x): x is string => x != null))
   const bench = active.filter((id) => !placed.has(id))
   return [
@@ -394,6 +412,17 @@ export function baseLineup(
     ...Array.from({ length: Math.max(0, benchSlots - bench.length) }, () => ({ slot: 'BE', id: null })),
     ...Array.from({ length: irSlots }, (_, i) => ({ slot: 'IR', id: ir[i] ?? null })),
   ]
+}
+
+/** Starters placed in their ESPN slots (a repeated label like UTIL takes the next free one); a slot ESPN leaves empty stays empty. */
+function espnFill(active: readonly string[], starters: readonly SlotDef[], slotOf: (id: string) => string | undefined): { assignment: (string | null)[] } {
+  const assignment: (string | null)[] = starters.map(() => null)
+  for (const id of active) {
+    const s = slotOf(id)
+    const i = s == null ? -1 : starters.findIndex((x, k) => x.label === s && assignment[k] == null)
+    if (i >= 0) assignment[i] = id
+  }
+  return { assignment }
 }
 
 /** Each player's usual starting slot (index into ESPN's starter slots): the best lineup by 9-cat value. */

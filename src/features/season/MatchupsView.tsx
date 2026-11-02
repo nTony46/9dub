@@ -44,7 +44,9 @@ export function MatchupsView() {
   // Moves ESPN has queued for tomorrow: rosters already show them; today still counts the old ones.
   const pending = usePendingMoves()
   const windows = useMemo(() => pendingWindows(pending), [pending])
-  const opts = useMemo<ProjectionOptions>(() => ({ availability, injuries, slots, windows }), [availability, injuries, slots, windows])
+  // Everyone's actual ESPN lineups: the daily engine starts who each manager starts.
+  const lineups = useApp((s) => s.season.espn?.lineups ?? null)
+  const opts = useMemo<ProjectionOptions>(() => ({ availability, injuries, slots, windows, lineups }), [availability, injuries, slots, windows, lineups])
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [mapping, setMapping] = useState(false)
