@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MatchupPlayer, WeekTotals } from '@/analytics/matchup'
 import { ESPN_DEFAULT_SLOTS } from '@/analytics/positions'
 import type { StatLine } from '@/analytics/types'
-import { applyLab, finishedWeeks, labWeeks, leagueMetrics, lineValues, seasonLine, teamWeeks, tierOf, volumeFactor, volumeFactors, type LeagueRates } from '@/features/season/lab'
+import { applyLab, finishedWeeks, labWeeks, leagueMetrics, lineValues, overallRank, seasonLine, teamWeeks, tierOf, volumeFactor, volumeFactors, type LeagueRates } from '@/features/season/lab'
 import type { EspnSync } from '@/store/schema'
 
 type Span = NonNullable<EspnSync['stats'][string]['season']>
@@ -106,6 +106,12 @@ describe('Roster Lab: ranks and odds', () => {
     expect(m.strength).toHaveLength(4)
     expect(m.cpm).toBeCloseTo(m.strength[0])
     expect(m.p6).toBeLessThanOrEqual(m.p5)
+    // The league table: every team's ranks, the same as its own view.
+    expect(m.teams[0].ranks).toEqual(m.ranks)
+    expect(m.teams[3].ranks).toMatchObject({ REB: 1, STL: 1, BLK: 1, TO: 1, PTS: 2 })
+    expect(m.teams[2].ranks.PTS).toBe(4)
+    expect(m.teams.map((_, t) => overallRank(m.strength, t)).sort()).toEqual([1, 2, 3, 4])
+    expect(overallRank(m.strength, 0)).toBe(m.overall)
   })
 
   it('a better roster moves the ranks and odds up', () => {

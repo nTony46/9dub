@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Button, IconButton } from '@/components/ui/Button'
 import { Input, Segmented, Select } from '@/components/ui/Controls'
 import { Empty, Panel } from '@/components/ui/Panel'
+import { Tip } from '@/components/ui/Tooltip'
 import { cn } from '@/lib/cn'
 import { divergingFill, signClass } from '@/lib/diverging'
 import { normalizeName } from '@/data/normalize'
@@ -21,6 +22,7 @@ import {
   labWeeks,
   leagueMetrics,
   lineValues,
+  overallRank,
   strongest,
   teamWeeks,
   tierOf,
@@ -34,7 +36,23 @@ import { useCurrentRosters, useInjuries, useScheduleIndex, type ProjectionOption
 
 const ord = (n: number) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th')
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`
-const TIER = { win: { label: 'Win', tone: 'good' }, swing: { label: 'Swing', tone: 'warn' }, punt: { label: 'Punt', tone: 'bad' } } as const
+const TIER = { win: { label: 'Win', text: 'text-good' }, swing: { label: 'Swing', text: 'text-warn' }, punt: { label: 'Punt', text: 'text-bad' } } as const
+/** Heat fills: each category's weekly totals as z-scores across the league (fewer turnovers = better), full color at 1.2 SD. */
+const HEAT_SCALE = 1.2
+const HEAT_MAX = 0.7
+const weeklyText = (c: Category, v: number) => (c === 'FG' || c === 'FT' ? v.toFixed(3).replace(/^0/, '') : `${c === 'PTS' ? v.toFixed(0) : v.toFixed(1)}/wk`)
+
+/** Every team's z-score in each category (sign: better = positive) and in categories won per matchup. */
+function heatOf(m: LabMetrics): { cats: Record<Category, number>; strength: number }[] {
+  const z = (xs: number[]) => {
+    const mu = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
+    const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mu) ** 2, 0) / Math.max(1, xs.length)) || 1
+    return xs.map((x) => (x - mu) / sd)
+  }
+  const byCat = Object.fromEntries(CATEGORIES.map((c) => [c, z(m.teams.map((t) => (c === 'TO' ? -t.weekly[c] : t.weekly[c])))])) as Record<Category, number[]>
+  const strength = z(m.strength)
+  return m.teams.map((_, t) => ({ cats: Object.fromEntries(CATEGORIES.map((c) => [c, byCat[c][t]])) as Record<Category, number>, strength: strength[t] }))
+}
 
 /**
  * Roster Lab: try waiver pickups (any of your players for any free agent or
@@ -93,7 +111,7 @@ export function RosterLab() {
     if (!valid.length && !t) return null
     const ros = applyLab(active, me, valid, t)
     const weeksNow = lab.base.map((w, k) => (k === me || k === t?.team ? lab.project(ros[k], k) : w))
-    return { metrics: leagueMetrics(weeksNow, me, lab.top4), partner: t?.team ?? null }
+    return { metrics: leagueMetrics(weeksNow, me, lab.top4), partner: t?.team ?? null, rosters: ros }
   }, [lab, me, changes, trade, active])
 
   if (!engine) return <Empty title="No player data loaded" />
@@ -186,18 +204,17 @@ export function RosterLab() {
         </Panel>
       </div>
 
-      <Results base={base} after={after} teams={settings.teams} />
+      <Results base={base} after={after} teams={settings.teams} me={me} />
 
-      {scenario?.partner != null && after ? (
-        <p className="text-[12.5px] text-chalk-3">
-          {teamLabel(settings, scenario.partner)} after the trade: {base.strength[scenario.partner].toFixed(2)} → {after.strength[scenario.partner].toFixed(2)} categories per matchup (
-          <span className={signClass(after.strength[scenario.partner] - base.strength[scenario.partner])}>
-            {after.strength[scenario.partner] - base.strength[scenario.partner] >= 0 ? '+' : '−'}
-            {Math.abs(after.strength[scenario.partner] - base.strength[scenario.partner]).toFixed(2)}
-          </span>
-          ).
-        </p>
-      ) : null}
+      <LeagueTable
+        base={base}
+        after={after}
+        me={me}
+        partner={scenario?.partner ?? null}
+        players={(scenario?.rosters ?? active).map((r) => r.length)}
+        teamName={(t) => teamLabel(settings, t)}
+      />
+
 
       <p className="text-[12px] leading-snug text-chalk-4">
         {basis === 'season'
@@ -373,8 +390,9 @@ function TradeBuilder({
   )
 }
 
-function Results({ base, after, teams }: { base: LabMetrics; after: LabMetrics | null; teams: number }) {
+function Results({ base, after, teams, me }: { base: LabMetrics; after: LabMetrics | null; teams: number; me: number }) {
   const m = after ?? base
+  const z = useMemo(() => heatOf(m), [m])
   const opponents = teams - 1
   const delta = (x: number, digits = 1, suffix = '') =>
     Math.abs(x) < 1e-9 ? <span className="text-chalk-4">no change</span> : <span className={signClass(x)}>{`${x > 0 ? '+' : '−'}${Math.abs(x).toFixed(digits)}${suffix}`}</span>
@@ -391,7 +409,6 @@ function Results({ base, after, teams }: { base: LabMetrics; after: LabMetrics |
   const shifts = CATEGORIES.filter((c) => tierOf(m.wins[c], opponents) !== tierOf(base.wins[c], opponents)).map(
     (c) => `${CATEGORY_META[c].label} ${TIER[tierOf(base.wins[c], opponents)].label} → ${TIER[tierOf(m.wins[c], opponents)].label}`,
   )
-  const value = (c: Category) => (c === 'FG' || c === 'FT' ? m.weekly[c].toFixed(3).replace(/^0/, '') : `${c === 'PTS' ? m.weekly[c].toFixed(0) : m.weekly[c].toFixed(1)}/wk`)
   return (
     <Panel title={after ? 'With these changes' : 'Your team now'} subtitle={after ? 'Changes from your current roster in color.' : 'Pick a change above to see how it moves these.'}>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" data-testid="lab-summary">
@@ -406,19 +423,26 @@ function Results({ base, after, teams }: { base: LabMetrics; after: LabMetrics |
       <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-9" data-testid="lab-ranks">
         {CATEGORIES.map((c) => {
           const t = tierOf(m.wins[c], opponents)
+          const was = base.ranks[c]
           return (
-            <div key={c} className="rounded-md border border-seam px-1.5 py-2 text-center" style={{ background: divergingFill((teams + 1) / 2 - m.ranks[c], (teams - 1) / 2) }}>
-              <div className="text-[11.5px] font-semibold text-chalk-3">{CATEGORY_META[c].label}</div>
-              <div className="font-display text-[18px] font-semibold tabular-nums">
-                {ord(m.ranks[c])}
-                {after ? rankDelta(base.ranks[c], m.ranks[c]) : null}
+            <div key={c} className="overflow-hidden rounded-md border border-seam bg-well text-center">
+              <div className="on-heat px-1.5 pb-1.5 pt-1" style={{ background: divergingFill(z[me].cats[c], HEAT_SCALE, HEAT_MAX) }}>
+                <div className="text-[11.5px] font-semibold text-chalk">{CATEGORY_META[c].label}</div>
+                <div className="font-display text-[21px] font-bold leading-tight tabular-nums text-chalk">{ord(m.ranks[c])}</div>
               </div>
-              <div className="text-[11px] tabular-nums text-chalk-3">
-                {value(c)} · {m.wins[c].toFixed(1)} of {opponents}
+              <div className="space-y-0.5 px-1 py-1.5">
+                <div className="text-[11px] tabular-nums text-chalk-2">
+                  {weeklyText(c, m.weekly[c])} · {m.wins[c].toFixed(1)} of {opponents}
+                </div>
+                <div className="flex items-center justify-center gap-1.5 text-[11px] font-semibold tabular-nums">
+                  <span className={TIER[t].text}>{TIER[t].label}</span>
+                  {after && was !== m.ranks[c] ? (
+                    <span className={was > m.ranks[c] ? 'text-plus' : 'text-minus'}>
+                      {was > m.ranks[c] ? `▲${was - m.ranks[c]}` : `▼${m.ranks[c] - was}`} <span className="font-normal text-chalk-3">was {ord(was)}</span>
+                    </span>
+                  ) : null}
+                </div>
               </div>
-              <Badge tone={TIER[t].tone} className="mt-1">
-                {TIER[t].label}
-              </Badge>
             </div>
           )
         })}
@@ -434,6 +458,130 @@ function Results({ base, after, teams }: { base: LabMetrics; after: LabMetrics |
       <p className="mt-2 text-[11.5px] text-chalk-4">
         Win: beat {Math.ceil((7 / 11) * opponents)}+ of {opponents} teams in that category in a typical week · Swing: {Math.ceil((4 / 11) * opponents)}–{Math.ceil((7 / 11) * opponents) - 1} · Punt: fewer.
       </p>
+    </Panel>
+  )
+}
+
+type SortKey = Category | 'overall'
+
+/** Every team's league rank in each category, re-ranked with your changes (arrows: moves from now). */
+function LeagueTable({
+  base,
+  after,
+  me,
+  partner,
+  players,
+  teamName,
+}: {
+  base: LabMetrics
+  after: LabMetrics | null
+  me: number
+  partner: number | null
+  players: number[]
+  teamName: (t: number) => string
+}) {
+  const m = after ?? base
+  const [sort, setSort] = useState<SortKey>('overall')
+  const z = useMemo(() => heatOf(m), [m])
+  const n = m.teams.length
+  const overall = m.strength.map((_, t) => overallRank(m.strength, t))
+  const was = base.strength.map((_, t) => overallRank(base.strength, t))
+  const order = [...Array(n).keys()].sort((a, b) => (sort === 'overall' ? m.strength[b] - m.strength[a] : m.teams[a].ranks[sort] - m.teams[b].ranks[sort] || m.strength[b] - m.strength[a]))
+  const move = (before: number, now: number) =>
+    after && before !== now ? <span className="ml-0.5 text-[10.5px] font-semibold">{before > now ? `▲${before - now}` : `▼${now - before}`}</span> : null
+  const header = (key: SortKey, label: string, title: string) => (
+    <th key={key} className="h-9 border-b border-seam-strong px-0.5 text-center align-middle" aria-sort={sort === key ? 'ascending' : undefined}>
+      <button
+        type="button"
+        onClick={() => setSort(key)}
+        title={title}
+        className={cn('font-display text-[12.5px] font-semibold tracking-wide', sort === key ? 'text-chalk underline decoration-clock decoration-2 underline-offset-4' : 'text-chalk-3 hover:text-chalk')}
+      >
+        {label}
+      </button>
+    </th>
+  )
+  return (
+    <Panel
+      title="League"
+      subtitle={after ? 'Every team re-ranked with your changes; ▲▼ are moves from now. Other teams move too as you pass them.' : 'Every team’s rank in each category over the rest of the regular season (1 = best). Click a column to sort.'}
+    >
+      <div className="overflow-x-auto rounded-md border border-seam" data-testid="lab-league">
+        <table className="w-full border-separate border-spacing-0 text-[12.5px]">
+          <thead>
+            <tr>
+              <th className="h-9 border-b border-seam-strong px-3 text-left">
+                <span className="label-caps">Team</span>
+              </th>
+              <th className="h-9 w-12 border-b border-seam-strong px-1 text-center font-display text-[12px] font-semibold text-chalk-3">Players</th>
+              {CATEGORIES.map((c) => header(c, CATEGORY_META[c].label, `Sort by ${CATEGORY_META[c].name} rank`))}
+              <th className="h-9 border-b border-seam-strong px-2 text-right font-display text-[12px] font-semibold text-chalk-3" title="Expected categories won per matchup against the league (all-play)">
+                Cats / matchup
+              </th>
+              {header('overall', 'Rank', 'Sort by overall rank (categories won per matchup)')}
+            </tr>
+          </thead>
+          <tbody>
+            {order.map((t) => {
+              const d = after ? m.strength[t] - base.strength[t] : 0
+              return (
+                <tr key={t} className={cn(t === me && 'bg-clock-soft/50')} data-testid={t === me ? 'lab-league-me' : undefined}>
+                  <td className="h-10 border-b border-seam px-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn('truncate font-medium', t === me ? 'text-clock' : 'text-chalk')}>{teamName(t)}</span>
+                      {t === partner ? <Badge tone="outline">Trade</Badge> : null}
+                    </div>
+                    <div className="text-[10.5px] text-chalk-4">slot {t + 1}</div>
+                  </td>
+                  <td className="border-b border-seam text-center font-mono text-[12px] tabular-nums text-chalk-2">{players[t]}</td>
+                  {CATEGORIES.map((c) => {
+                    const r = m.teams[t].ranks[c]
+                    return (
+                      <td key={c} className="border-b border-seam p-[2px]">
+                        <Tip
+                          content={
+                            <div className="space-y-0.5">
+                              <div className="font-medium text-chalk">
+                                {teamName(t)} · {CATEGORY_META[c].name}
+                              </div>
+                              <div>
+                                {weeklyText(c, m.teams[t].weekly[c])} · rank {r} of {n}
+                                {after && base.teams[t].ranks[c] !== r ? ` (currently ${base.teams[t].ranks[c]})` : ''}
+                              </div>
+                              {c === 'TO' ? <div className="text-chalk-3">Fewer turnovers = better.</div> : null}
+                            </div>
+                          }
+                        >
+                          <div
+                            className="on-heat flex h-9 min-w-[46px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-semibold tabular-nums text-chalk"
+                            style={{ background: divergingFill(z[t].cats[c], HEAT_SCALE, HEAT_MAX) }}
+                          >
+                            {r}
+                            {move(base.teams[t].ranks[c], r)}
+                          </div>
+                        </Tip>
+                      </td>
+                    )
+                  })}
+                  <td className="border-b border-seam px-2 text-right font-mono text-[12px] tabular-nums text-chalk-2">
+                    {m.strength[t].toFixed(2)}
+                    {after && Math.abs(d) >= 0.005 ? <span className={cn('ml-1 text-[11px]', signClass(d, 0.005))}>{`${d > 0 ? '+' : '−'}${Math.abs(d).toFixed(2)}`}</span> : null}
+                  </td>
+                  <td className="border-b border-seam p-[2px]">
+                    <div
+                      className="on-heat flex h-9 min-w-[52px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-bold tabular-nums text-chalk"
+                      style={{ background: divergingFill(z[t].strength, HEAT_SCALE, HEAT_MAX) }}
+                    >
+                      {overall[t]}
+                      {move(was[t], overall[t])}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </Panel>
   )
 }

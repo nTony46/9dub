@@ -234,6 +234,8 @@ export interface LabMetrics {
   overall: number
   /** Every team's expected categories won per matchup, by team. */
   strength: number[]
+  /** Every team's average weekly totals and league rank in each category, by team. */
+  teams: { weekly: Record<Category, number>; ranks: Record<Category, number> }[]
 }
 
 const KEY: Record<Exclude<Category, 'FG' | 'FT'>, keyof WeekTotals> = { '3PM': 'tpm', PTS: 'pts', REB: 'reb', AST: 'ast', STL: 'stl', BLK: 'blk', TO: 'tov' }
@@ -299,22 +301,29 @@ export function leagueMetrics(weeks: readonly (readonly WeekTotals[])[], me: num
   const games = Math.max(1, (teams - 1) * nw)
   for (let i = 0; i < teams; i++) strength[i] /= games
   const avg = weeks.map(averageWeek)
-  const mine = avg[me]
-  const ranks = Object.fromEntries(
-    CATEGORIES.map((c) => [c, 1 + avg.filter((o, t) => t !== me && (c === 'TO' ? o[c] < mine[c] - 1e-9 : o[c] > mine[c] + 1e-9)).length]),
-  ) as Record<Category, number>
+  const rankOf = (k: number) =>
+    Object.fromEntries(
+      CATEGORIES.map((c) => [c, 1 + avg.filter((o, t) => t !== k && (c === 'TO' ? o[c] < avg[k][c] - 1e-9 : o[c] > avg[k][c] + 1e-9)).length]),
+    ) as Record<Category, number>
+  const table = avg.map((weekly, t) => ({ weekly, ranks: rankOf(t) }))
   const field = top4 ?? strongest(strength, me, 4)
   return {
-    ranks,
-    weekly: mine,
+    ranks: table[me].ranks,
+    weekly: avg[me],
     wins,
     cpm: strength[me],
     p5: p5 / games,
     p6: p6 / games,
     top4: field.length ? field.reduce((a, t) => a + p5vs[t], 0) / field.length : 0,
-    overall: 1 + strength.filter((s, t) => t !== me && s > strength[me] + 1e-9).length,
+    overall: overallRank(strength, me),
     strength,
+    teams: table,
   }
+}
+
+/** Rank (1 = best) of team `t` by expected categories won per matchup. */
+export function overallRank(strength: readonly number[], t: number): number {
+  return 1 + strength.filter((s, o) => o !== t && s > strength[t] + 1e-9).length
 }
 
 /** The `n` strongest teams other than `me`, by expected categories won per matchup. */
