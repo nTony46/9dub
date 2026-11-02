@@ -39,7 +39,7 @@ export function SettingsPage() {
             type="button"
             onClick={() => navigate('settings', t.id)}
             aria-current={tab === t.id ? 'page' : undefined}
-            className={cn('mb-0.5 flex w-full rounded-md px-2 py-1.5 text-left text-[13px]', tab === t.id ? 'bg-stand font-medium text-chalk' : 'text-chalk-3 hover:text-chalk')}
+            className={cn('mb-0.5 flex w-full rounded-md px-2 py-1.5 text-left text-[13px]', tab === t.id ? 'bg-stand font-medium text-chalk' : 'text-nav-idle hover:text-chalk')}
           >
             {t.label}
           </button>

@@ -6,30 +6,50 @@
  * 9dub tokens — "war-room scoreboard".
  * arena/floor/stand/booth: surface elevation (whisper-quiet steps, one hue).
  * chalk-*: text tiers. seam: borders. clock: the single accent (on the clock,
- * your pick, selection). plus/minus/mid: diverging category strength.
+ * your pick, selection). plus/minus: advantage/disadvantage ink; heat-plus/
+ * heat-minus/mid: the diverging heat scale (poles + neutral midpoint).
+ * sheet: a full-bleed data page or board (white paper in light; dark lets the
+ * page show through). tab-on/tab-ring: the selected segment or tab.
+ * nav-idle: inactive primary nav. label: caps section labels and column
+ * heads. focus: keyboard focus ring. gone: opacity of drafted players' rows.
+ *
+ * Light ("box score on paper"): near-white cool-neutral surfaces — the page is
+ * a quiet gray, cards and tables are white — charcoal ink, steel-blue and
+ * brick-red data, a deep amber clock. Every text tier and accent clears WCAG AA
+ * on every surface it sits on; the heat scale's strongest step still keeps
+ * charcoal numbers above 4.5:1.
  */
 :root {
-  --arena: #f4f3ef;
-  --floor: #fbfaf8;
-  --stand: #f0eee9;
+  --arena: #f5f6f7;
+  --floor: #ffffff;
+  --stand: #edeff2;
   --booth: #ffffff;
-  --well: #ecebe6;
+  --well: #f2f3f5;
   --chalk: #16181c;
-  --chalk-2: #3f434a;
-  --chalk-3: #5f646d;
-  --chalk-4: #858a93;
-  --seam: rgba(20, 22, 28, 0.1);
-  --seam-strong: rgba(20, 22, 28, 0.18);
-  --clock: #b7790f;
+  --chalk-2: #3a3f47;
+  --chalk-3: #565c66;
+  --chalk-4: #656b75;
+  --seam: rgba(15, 23, 42, 0.085);
+  --seam-strong: rgba(15, 23, 42, 0.15);
+  --clock: #965c00;
   --clock-ink: #fffaf0;
-  --clock-soft: rgba(183, 121, 15, 0.12);
-  --clock-line: rgba(183, 121, 15, 0.45);
-  --plus: #2f6fc0;
-  --minus: #c8423f;
-  --mid: #e7e5e0;
-  --good: #1f8a4c;
-  --warn: #a86a00;
-  --bad: #c33c3a;
+  --clock-soft: rgba(150, 92, 0, 0.12);
+  --clock-line: rgba(150, 92, 0, 0.45);
+  --plus: #2b5e9a;
+  --minus: #a63b29;
+  --mid: #e6e8ec;
+  --heat-plus: #0063b1;
+  --heat-minus: #b63023;
+  --good: #167645;
+  --warn: #8c5e1a;
+  --bad: #b02a2d;
+  --sheet: #ffffff;
+  --tab-on: #ffffff;
+  --tab-ring: rgba(15, 23, 42, 0.14);
+  --nav-idle: #626872;
+  --label: #4a5059;
+  --focus: rgba(150, 92, 0, 0.85);
+  --gone: 0.7;
   --shadow-pop: 0 0 0 1px rgba(20, 22, 28, 0.08), 0 8px 24px -8px rgba(20, 22, 28, 0.18);
 }
 
@@ -56,6 +76,33 @@
   --warn: #e0a43a;
   --bad: #e5605c;
   --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 12px 32px -12px rgba(0, 0, 0, 0.7);
+  /* Split tokens: in dark they stay exactly the shared values they replaced. */
+  --heat-plus: var(--plus);
+  --heat-minus: var(--minus);
+  --sheet: transparent;
+  --tab-on: var(--stand);
+  --tab-ring: var(--seam-strong);
+  --nav-idle: var(--chalk-3);
+  --label: var(--chalk-3);
+  --focus: var(--clock-line);
+  --gone: 0.55;
+}
+
+/*
+ * on-heat: text that sits on a heat-scale fill. In light mode a colored or
+ * muted ink can't clear AA on a mid-tone fill, so inside these cells every
+ * text tier and tone resolves to charcoal; the words (Win/Punt, ▲2) carry the
+ * meaning. Dark mode is untouched: light ink already reads on its fills.
+ */
+:root:not(.dark) .on-heat {
+  --chalk-2: #23272d;
+  --chalk-3: #23272d;
+  --chalk-4: #23272d;
+  --plus: var(--chalk);
+  --minus: var(--chalk);
+  --good: var(--chalk);
+  --warn: var(--chalk);
+  --bad: var(--chalk);
 }
 
 @theme inline {
@@ -77,6 +124,14 @@
   --color-plus: var(--plus);
   --color-minus: var(--minus);
   --color-mid: var(--mid);
+  --color-heat-plus: var(--heat-plus);
+  --color-heat-minus: var(--heat-minus);
+  --color-sheet: var(--sheet);
+  --color-tab-on: var(--tab-on);
+  --color-tab-ring: var(--tab-ring);
+  --color-nav-idle: var(--nav-idle);
+  --color-label: var(--label);
+  --color-focus: var(--focus);
   --color-good: var(--good);
   --color-warn: var(--warn);
   --color-bad: var(--bad);
@@ -109,7 +164,7 @@
     background: var(--clock-soft);
   }
   :focus-visible {
-    outline: 2px solid var(--clock-line);
+    outline: 2px solid var(--focus);
     outline-offset: 1px;
   }
   button {
@@ -134,7 +189,7 @@
     font-weight: 600;
     letter-spacing: 0.07em;
     text-transform: uppercase;
-    color: var(--chalk-3);
+    color: var(--label);
   }
   .text-balance {
     text-wrap: balance;

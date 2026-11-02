@@ -119,7 +119,7 @@ export function WhatIf({
                         return (
                           <td key={c} className="border-b border-seam p-[1px]">
                             <div
-                              className="flex h-8 min-w-[40px] flex-col items-center justify-center rounded-[3px] font-mono text-[11px] tnum"
+                              className="on-heat flex h-8 min-w-[40px] flex-col items-center justify-center rounded-[3px] font-mono text-[11px] tnum"
                               style={{ background: divergingFill(dz, 2.2, 0.6) }}
                               title={`${CATEGORY_META[c].label}: ${signed(dz, 2)} z · ${rankLabel} ${w.rankBefore[c]}→${w.rankAfter[c]}`}
                             >

@@ -52,7 +52,7 @@ export function PlayersPage() {
   const ds = engine.dataset
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-sheet">
       <div className="border-b border-seam bg-floor">
         <div className="mx-auto max-w-[1240px] px-5 py-3.5">
         <div className="flex flex-wrap items-center gap-3">

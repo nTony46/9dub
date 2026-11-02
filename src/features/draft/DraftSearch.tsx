@@ -97,7 +97,7 @@ export function DraftSearch({ live }: { live: LiveAnalysis }) {
                 else inputRef.current?.blur()
               }
             }}
-            className="h-10 w-full rounded-lg border border-seam-strong bg-well pl-9 pr-24 text-[14px] font-medium text-chalk placeholder:font-normal placeholder:text-chalk-4 focus:border-clock-line focus:outline-none"
+            className="h-10 w-full rounded-lg border border-seam-strong bg-well pl-9 pr-24 text-[14px] font-medium text-chalk placeholder:font-normal placeholder:text-chalk-4 focus:border-focus focus:outline-none"
           />
           <div className="pointer-events-none absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1 text-[11px] text-chalk-4">
             {q ? null : (

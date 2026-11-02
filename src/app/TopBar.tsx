@@ -105,7 +105,7 @@ export function TopBar() {
               aria-current={active ? 'page' : undefined}
               className={cn(
                 'relative h-12 whitespace-nowrap px-3 text-[14px] font-medium transition-colors',
-                active ? 'text-chalk' : 'text-chalk-3 hover:text-chalk-2',
+                active ? 'text-chalk' : 'text-nav-idle hover:text-chalk-2',
               )}
             >
               {n.label}

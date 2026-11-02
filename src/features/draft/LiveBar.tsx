@@ -40,7 +40,7 @@ export function LiveBar() {
             onClick={() => navigate(t.route)}
             className={cn(
               'flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium transition-colors',
-              route === t.route ? 'bg-stand text-chalk shadow-[0_0_0_1px_var(--seam-strong)]' : 'text-chalk-3 hover:text-chalk',
+              route === t.route ? 'bg-stand text-chalk shadow-[0_0_0_1px_var(--seam-strong)]' : 'text-nav-idle hover:text-chalk',
             )}
           >
             {t.label}

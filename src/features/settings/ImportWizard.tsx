@@ -91,7 +91,7 @@ export function ImportWizard() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={'Paste rows copied from a projections or ADP table (including the header row), or CSV text.\nTabs, commas, pipes and semicolons are detected automatically.'}
-              className="h-44 w-full resize-y rounded-md border border-seam bg-well p-3 font-mono text-[11.5px] leading-relaxed text-chalk placeholder:font-sans placeholder:text-chalk-4 focus:border-clock-line focus:outline-none"
+              className="h-44 w-full resize-y rounded-md border border-seam bg-well p-3 font-mono text-[11.5px] leading-relaxed text-chalk placeholder:font-sans placeholder:text-chalk-4 focus:border-focus focus:outline-none"
             />
             <div className="flex items-center gap-2">
               <Button variant="primary" onClick={() => parse(text, null)} disabled={!text.trim()}>

@@ -80,7 +80,7 @@ function BoardPane({ live }: { live: LiveAnalysis }) {
   const actionLabel = d.isUserOnClock ? 'Draft' : d.onClockTeam != null ? 'Draft' : undefined
 
   return (
-    <section ref={boardRef} className="flex min-h-0 min-w-0 flex-col" aria-label="Player board">
+    <section ref={boardRef} className="flex min-h-0 min-w-0 flex-col bg-sheet" aria-label="Player board">
       <div className="border-b border-seam px-4 pb-2.5 pt-3">
         <DraftSearch live={live} />
         <div className="mt-2.5 flex flex-wrap items-center gap-2">

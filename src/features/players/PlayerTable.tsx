@@ -427,7 +427,7 @@ export const PlayerTable = memo(function PlayerTable(props: PlayerTableProps) {
               data-player-id={r.id}
               className={cn(
                 'group h-[36px] hover:bg-stand/70',
-                r.status === 'drafted' && 'opacity-55',
+                r.status === 'drafted' && 'opacity-(--gone)',
                 props.highlightId === r.id && 'bg-clock-soft',
               )}
             >

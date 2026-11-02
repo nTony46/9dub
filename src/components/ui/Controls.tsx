@@ -44,7 +44,7 @@ export function Segmented<T extends string>({
             className={cn(
               'whitespace-nowrap rounded-[5px] font-medium transition-colors duration-100',
               size === 'xs' ? 'h-6 px-2 text-[12px]' : 'h-7 px-3 text-[13px]',
-              active ? 'bg-stand text-chalk shadow-[0_0_0_1px_var(--seam-strong)]' : 'text-chalk-3 hover:text-chalk',
+              active ? 'bg-tab-on text-chalk shadow-[0_0_0_1px_var(--tab-ring)]' : 'text-chalk-3 hover:text-chalk',
             )}
           >
             {o.label}
@@ -60,7 +60,7 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
     <input
       ref={ref}
       className={cn(
-        'h-8 w-full rounded-md border border-seam bg-well px-2.5 text-[13px] text-chalk placeholder:text-chalk-4 focus:border-clock-line focus:outline-none',
+        'h-8 w-full rounded-md border border-seam bg-well px-2.5 text-[13px] text-chalk placeholder:text-chalk-4 focus:border-focus focus:outline-none',
         className,
       )}
       {...rest}
@@ -72,7 +72,7 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   return (
     <select
       className={cn(
-        'h-8 rounded-md border border-seam bg-well px-2 pr-7 text-[12.5px] text-chalk focus:border-clock-line focus:outline-none',
+        'h-8 rounded-md border border-seam bg-well px-2 pr-7 text-[12.5px] text-chalk focus:border-focus focus:outline-none',
         className,
       )}
       {...rest}

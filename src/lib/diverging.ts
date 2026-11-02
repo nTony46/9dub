@@ -8,7 +8,7 @@ export function divergingFill(value: number | null | undefined, scale = 2, max =
   const t = Math.max(-1, Math.min(1, value / scale))
   const a = Math.round(Math.pow(Math.abs(t), 0.85) * max * 100)
   if (a < 4) return 'var(--mid)'
-  const pole = t > 0 ? 'var(--plus)' : 'var(--minus)'
+  const pole = t > 0 ? 'var(--heat-plus)' : 'var(--heat-minus)'
   return `color-mix(in oklab, ${pole} ${a}%, var(--mid))`
 }
 
