@@ -3,13 +3,14 @@ import { Segmented } from '@/components/ui/Controls'
 import { cn } from '@/lib/cn'
 import { useWirePlacement } from './model'
 import { MatchupsView } from './MatchupsView'
+import { RosterLab } from './RosterLab'
 import { RostersView } from './RostersView'
 
-type Tab = 'matchups' | 'rosters'
+type Tab = 'matchups' | 'rosters' | 'lab'
 
 export function SeasonPage() {
   const { sub } = useRoute()
-  const tab: Tab = sub === 'rosters' ? 'rosters' : 'matchups'
+  const tab: Tab = sub === 'rosters' || sub === 'lab' ? sub : 'matchups'
   // A docked waiver wire takes its own column, so the page widens to use a wide window.
   const placement = useWirePlacement()
   const width = tab === 'matchups' && placement === 'dock' ? 'max-w-[2240px]' : 'max-w-[1240px]'
@@ -25,11 +26,12 @@ export function SeasonPage() {
             options={[
               { value: 'matchups', label: 'Matchups' },
               { value: 'rosters', label: 'Rosters' },
+              { value: 'lab', label: 'Roster Lab' },
             ]}
           />
         </div>
       </div>
-      <div className={cn('mx-auto px-5 py-4', width)}>{tab === 'matchups' ? <MatchupsView /> : <RostersView />}</div>
+      <div className={cn('mx-auto px-5 py-4', width)}>{tab === 'matchups' ? <MatchupsView /> : tab === 'rosters' ? <RostersView /> : <RosterLab />}</div>
     </div>
   )
 }

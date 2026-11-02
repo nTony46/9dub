@@ -151,9 +151,9 @@ export const EspnSyncSchema = z.object({
   /** Season records in categories and places, as ESPN's standings have them. */
   standings: z.array(EspnStandingSchema).default([]),
   /**
-   * Actual stats of players your data has no projection for (their stand-in
-   * lines) and of every free agent and waiver player ESPN listed (the waiver
-   * wire), with their waiver status.
+   * Actual stats of every rostered player (stand-in lines for those your data
+   * has no projection for; the Roster Lab's season basis) and of every free
+   * agent and waiver player ESPN listed (the waiver wire), with their waiver status.
    */
   stats: z
     .record(
