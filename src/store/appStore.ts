@@ -123,6 +123,8 @@ export interface AppState extends PersistedState {
   undoRosterMove: (id: string) => void
   /** Mark a player out (no games count through `until`; null = until further notice), or healthy with `false`. */
   setInjury: (playerId: string, until: string | null | false) => void
+  /** Tag one of your players as a streamer, or untag him (a label only). */
+  toggleStreamer: (playerId: string) => void
 
   // ── ESPN (read-only league sync through the local server) ──
   /** off = not available on this server (static build, tests); setup = cookies not saved yet. */
@@ -169,7 +171,7 @@ export function defaultPersisted(now = Date.now()): PersistedState {
     prefs: PrefsSchema.parse({}),
     activeDatasetId: null,
     undoStack: [],
-    season: { matchups: [], rosterMoves: [], injuries: [], espn: null },
+    season: { matchups: [], rosterMoves: [], injuries: [], espn: null, streamers: [] },
   }
 }
 
@@ -668,6 +670,10 @@ export const useApp = create<AppState>()((set, get) => {
         const prev = s.season.injuries.find((i) => i.playerId === playerId)
         return { season: { ...s.season, injuries: until === false ? rest : [...rest, { playerId, until, at: prev?.at ?? Date.now(), note: prev?.note ?? '' }] } }
       }),
+    toggleStreamer: (playerId) =>
+      set((s) => ({
+        season: { ...s.season, streamers: s.season.streamers.includes(playerId) ? s.season.streamers.filter((id) => id !== playerId) : [...s.season.streamers, playerId] },
+      })),
 
     checkEspn: async () => {
       type Status = { enabled?: unknown; configured?: unknown }

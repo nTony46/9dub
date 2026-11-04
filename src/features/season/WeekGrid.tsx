@@ -51,6 +51,7 @@ export function WeekGrid({
   const [legend, setLegend] = useState(false)
   const openPreview = useApp((s) => s.openPreview)
   const injuries = useApp((s) => s.season.injuries)
+  const streamers = useApp((s) => s.season.streamers)
   const irSlots = useApp((s) => s.settings.irSlots)
   const rounds = useApp((s) => s.settings.rounds)
   const side = who === 'me' ? me : them
@@ -232,6 +233,7 @@ export function WeekGrid({
                               <div>{game ? `${game}` : 'No game'} · {w?.games ?? 0} game{w?.games === 1 ? '' : 's'} this week</div>
                               {state === 'sits' ? <div className="text-warn">Has a game, but every seat he fits is taken.</div> : null}
                               {state === 'out' ? <div className="text-bad">Marked out.</div> : null}
+                              {who === 'me' && streamers.includes(id) ? <div>Tagged as a streamer.</div> : null}
                               {p && lineSource(p) ? <div>{lineSource(p)!.text}</div> : null}
                             </div>
                           }

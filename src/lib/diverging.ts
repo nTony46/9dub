@@ -12,6 +12,11 @@ export function divergingFill(value: number | null | undefined, scale = 2, max =
   return `color-mix(in oklab, ${pole} ${a}%, var(--mid))`
 }
 
+/** League heat: a team's z-score in a category across the league, full color at 1.2 SD (Roster Lab, matchup league ranks). */
+export function leagueHeat(z: number | null | undefined): string {
+  return divergingFill(z, 1.2, 0.7)
+}
+
 /** Ink colour for a signed value (used sparingly for deltas next to numbers). */
 export function signClass(x: number | null | undefined, eps = 0.05): string {
   if (x == null || Math.abs(x) < eps) return 'text-chalk-3'

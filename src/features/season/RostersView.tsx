@@ -1,7 +1,7 @@
-import { ArrowLeftRight, Bandage, Pencil, Undo2, X } from 'lucide-react'
+import { ArrowLeftRight, Bandage, Pencil, Repeat, Undo2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Positions } from '@/components/PlayerBits'
+import { Positions, StreamerBadge } from '@/components/PlayerBits'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Controls'
@@ -150,6 +150,10 @@ function TeamRoster({
   const setInjury = useApp((s) => s.setInjury)
   const renameTeam = useApp((s) => s.renameTeam)
   const openPreview = useApp((s) => s.openPreview)
+  // Streamer tags: your own team only, and only a label.
+  const streamers = useApp((s) => s.season.streamers)
+  const toggleStreamer = useApp((s) => s.toggleStreamer)
+  const mine = team === me
   const today = todayIso()
   const onTeam = useMemo(() => new Set(roster), [roster])
   const place = irPlacement(roster, injuries, settings.irSlots, today)
@@ -208,6 +212,7 @@ function TeamRoster({
           const inj = r.id ? injuries.find((i) => i.playerId === r.id && (i.until == null || i.until >= today)) : undefined
           const espnStatus = r.id ? espn?.[r.id]?.status : null
           const dataStatus = p?.rec.provenance?.status
+          const streamer = mine && !!r.id && streamers.includes(r.id)
           return (
             <li
               key={`${r.slot}-${k}`}
@@ -227,7 +232,21 @@ function TeamRoster({
                   ) : dataStatus && !espn ? (
                     <Badge tone={dataStatus.tag === 'out' || dataStatus.tag === 'suspended' ? 'bad' : 'warn'}>{statusText(dataStatus.tag)}</Badge>
                   ) : null}
+                  {streamer ? <StreamerBadge /> : null}
                   <span className="ml-auto flex shrink-0 items-center gap-1">
+                    {mine ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className={cn(streamer ? 'text-chalk' : 'text-chalk-3')}
+                        onClick={() => toggleStreamer(r.id!)}
+                        aria-label={streamer ? `Untag ${p.name} as a streamer` : `Tag ${p.name} as a streamer`}
+                        title={streamer ? 'Untag streamer' : 'Tag as a streamer (a label only — nothing else changes)'}
+                      >
+                        <Repeat size={12} />
+                        <span className="hidden sm:inline">{streamer ? 'Untag' : 'Streamer'}</span>
+                      </Button>
+                    ) : null}
                     {ir || inj ? (
                       <>
                         <Input

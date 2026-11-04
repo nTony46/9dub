@@ -9,13 +9,15 @@ import { Input, Segmented, Select } from '@/components/ui/Controls'
 import { Empty, Panel } from '@/components/ui/Panel'
 import { Tip } from '@/components/ui/Tooltip'
 import { cn } from '@/lib/cn'
-import { divergingFill, signClass } from '@/lib/diverging'
+import { leagueHeat, signClass } from '@/lib/diverging'
+import { ordinal } from '@/lib/format'
 import { normalizeName } from '@/data/normalize'
 import { useApp } from '@/store/appStore'
 import { teamLabel, useEngine, useLineupSlots, type EngineData } from '@/store/derived'
 import { irPlacement, todayIso } from '@/store/season'
 import {
   applyLab,
+  categoryZ,
   finishedWeeks,
   labLineFor,
   labPlayers,
@@ -27,6 +29,7 @@ import {
   teamWeeks,
   tierOf,
   volumeFactors,
+  zScores,
   type LabBasis,
   type LabChange,
   type LabMetrics,
@@ -34,24 +37,15 @@ import {
 } from './lab'
 import { useCurrentRosters, useInjuries, useScheduleIndex, type ProjectionOptions } from './model'
 
-const ord = (n: number) => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th')
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`
 const TIER = { win: { label: 'Win', text: 'text-good' }, swing: { label: 'Swing', text: 'text-warn' }, punt: { label: 'Punt', text: 'text-bad' } } as const
-/** Heat fills: each category's weekly totals as z-scores across the league (fewer turnovers = better), full color at 1.2 SD. */
-const HEAT_SCALE = 1.2
-const HEAT_MAX = 0.7
 const weeklyText = (c: Category, v: number) => (c === 'FG' || c === 'FT' ? v.toFixed(3).replace(/^0/, '') : `${c === 'PTS' ? v.toFixed(0) : v.toFixed(1)}/wk`)
 
-/** Every team's z-score in each category (sign: better = positive) and in categories won per matchup. */
+/** Heat fills: every team's z-score in each category's weekly totals (sign: better = positive) and in categories won per matchup. */
 function heatOf(m: LabMetrics): { cats: Record<Category, number>; strength: number }[] {
-  const z = (xs: number[]) => {
-    const mu = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
-    const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mu) ** 2, 0) / Math.max(1, xs.length)) || 1
-    return xs.map((x) => (x - mu) / sd)
-  }
-  const byCat = Object.fromEntries(CATEGORIES.map((c) => [c, z(m.teams.map((t) => (c === 'TO' ? -t.weekly[c] : t.weekly[c])))])) as Record<Category, number[]>
-  const strength = z(m.strength)
-  return m.teams.map((_, t) => ({ cats: Object.fromEntries(CATEGORIES.map((c) => [c, byCat[c][t]])) as Record<Category, number>, strength: strength[t] }))
+  const cats = categoryZ(m.teams.map((t) => t.weekly))
+  const strength = zScores(m.strength)
+  return m.teams.map((_, t) => ({ cats: cats[t], strength: strength[t] }))
 }
 
 /**
@@ -434,7 +428,7 @@ function Results({ base, after, teams, me }: { base: LabMetrics; after: LabMetri
     ['Win 6+ categories', pct(m.p6), delta((m.p6 - base.p6) * 100)],
     ['Win 5+ vs the top four', pct(m.top4), delta((m.top4 - base.top4) * 100)],
     ['Categories won per matchup', `${m.cpm.toFixed(2)} of 9`, delta(m.cpm - base.cpm, 2)],
-    ['Overall league rank', `${ord(m.overall)} of ${teams}`, base.overall === m.overall ? <span className="text-chalk-4">no change</span> : rankDelta(base.overall, m.overall)],
+    ['Overall league rank', `${ordinal(m.overall)} of ${teams}`, base.overall === m.overall ? <span className="text-chalk-4">no change</span> : rankDelta(base.overall, m.overall)],
   ]
   const groups: Record<'win' | 'swing' | 'punt', string[]> = { win: [], swing: [], punt: [] }
   for (const c of CATEGORIES) groups[tierOf(m.wins[c], opponents)].push(CATEGORY_META[c].label)
@@ -458,9 +452,9 @@ function Results({ base, after, teams, me }: { base: LabMetrics; after: LabMetri
           const was = base.ranks[c]
           return (
             <div key={c} className="overflow-hidden rounded-md border border-seam bg-well text-center">
-              <div className="on-heat px-1.5 pb-1.5 pt-1" style={{ background: divergingFill(z[me].cats[c], HEAT_SCALE, HEAT_MAX) }}>
+              <div className="on-heat px-1.5 pb-1.5 pt-1" style={{ background: leagueHeat(z[me].cats[c]) }}>
                 <div className="text-[11.5px] font-semibold text-chalk">{CATEGORY_META[c].label}</div>
-                <div className="font-display text-[21px] font-bold leading-tight tabular-nums text-chalk">{ord(m.ranks[c])}</div>
+                <div className="font-display text-[21px] font-bold leading-tight tabular-nums text-chalk">{ordinal(m.ranks[c])}</div>
               </div>
               <div className="space-y-0.5 px-1 py-1.5">
                 <div className="text-[11px] tabular-nums text-chalk-2">
@@ -470,7 +464,7 @@ function Results({ base, after, teams, me }: { base: LabMetrics; after: LabMetri
                   <span className={TIER[t].text}>{TIER[t].label}</span>
                   {after && was !== m.ranks[c] ? (
                     <span className={was > m.ranks[c] ? 'text-plus' : 'text-minus'}>
-                      {was > m.ranks[c] ? `▲${was - m.ranks[c]}` : `▼${m.ranks[c] - was}`} <span className="font-normal text-chalk-3">was {ord(was)}</span>
+                      {was > m.ranks[c] ? `▲${was - m.ranks[c]}` : `▼${m.ranks[c] - was}`} <span className="font-normal text-chalk-3">was {ordinal(was)}</span>
                     </span>
                   ) : null}
                 </div>
@@ -586,7 +580,7 @@ function LeagueTable({
                         >
                           <div
                             className="on-heat flex h-9 min-w-[46px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-semibold tabular-nums text-chalk"
-                            style={{ background: divergingFill(z[t].cats[c], HEAT_SCALE, HEAT_MAX) }}
+                            style={{ background: leagueHeat(z[t].cats[c]) }}
                           >
                             {r}
                             {move(base.teams[t].ranks[c], r)}
@@ -602,7 +596,7 @@ function LeagueTable({
                   <td className="border-b border-seam p-[2px]">
                     <div
                       className="on-heat flex h-9 min-w-[52px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-bold tabular-nums text-chalk"
-                      style={{ background: divergingFill(z[t].strength, HEAT_SCALE, HEAT_MAX) }}
+                      style={{ background: leagueHeat(z[t].strength) }}
                     >
                       {overall[t]}
                       {move(was[t], overall[t])}

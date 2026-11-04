@@ -1,5 +1,5 @@
 import { CATEGORIES, type Category } from '@/analytics/categories'
-import { compareWeek, projectSide, type MatchupPlayer, type WeekTotals } from '@/analytics/matchup'
+import { addTotals, compareWeek, projectSide, weekTotals, type MatchupPlayer, type WeekTotals } from '@/analytics/matchup'
 import type { SlotDef } from '@/analytics/positions'
 import type { StatLine } from '@/analytics/types'
 import { datesBetween } from '@/data/schedule'
@@ -301,11 +301,8 @@ export function leagueMetrics(weeks: readonly (readonly WeekTotals[])[], me: num
   const games = Math.max(1, (teams - 1) * nw)
   for (let i = 0; i < teams; i++) strength[i] /= games
   const avg = weeks.map(averageWeek)
-  const rankOf = (k: number) =>
-    Object.fromEntries(
-      CATEGORIES.map((c) => [c, 1 + avg.filter((o, t) => t !== k && (c === 'TO' ? o[c] < avg[k][c] - 1e-9 : o[c] > avg[k][c] + 1e-9)).length]),
-    ) as Record<Category, number>
-  const table = avg.map((weekly, t) => ({ weekly, ranks: rankOf(t) }))
+  const ranks = categoryRanks(avg)
+  const table = avg.map((weekly, t) => ({ weekly, ranks: ranks[t] }))
   const field = top4 ?? strongest(strength, me, 4)
   return {
     ranks: table[me].ranks,
@@ -319,6 +316,69 @@ export function leagueMetrics(weeks: readonly (readonly WeekTotals[])[], me: num
     strength,
     teams: table,
   }
+}
+
+/** Each team's league rank (1 = best) in each category; fewer turnovers is better, and tied teams share the better rank (1, 1, 3). */
+export function categoryRanks(values: readonly Record<Category, number>[]): Record<Category, number>[] {
+  return values.map((v, k) =>
+    Object.fromEntries(
+      CATEGORIES.map((c) => [c, 1 + values.filter((o, t) => t !== k && (c === 'TO' ? o[c] < v[c] - 1e-9 : o[c] > v[c] + 1e-9)).length]),
+    ) as Record<Category, number>,
+  )
+}
+
+/** Z-scores across the league (population SD; all equal → 0). */
+export function zScores(xs: readonly number[]): number[] {
+  const mu = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
+  const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mu) ** 2, 0) / Math.max(1, xs.length)) || 1
+  return xs.map((x) => (x - mu) / sd)
+}
+
+/** Each team's z-score in each category across the league, signed so better is positive (fewer turnovers = better): the heat fills. */
+export function categoryZ(values: readonly Record<Category, number>[]): Record<Category, number>[] {
+  const byCat = Object.fromEntries(CATEGORIES.map((c) => [c, zScores(values.map((v) => (c === 'TO' ? -v[c] : v[c])))])) as Record<Category, number[]>
+  return values.map((_, t) => Object.fromEntries(CATEGORIES.map((c) => [c, byCat[c][t]])) as Record<Category, number>)
+}
+
+export interface SeasonRanks {
+  /** Finished weeks counted (ESPN matchup periods, 1 = the first week). */
+  periods: number[]
+  /** The week in progress, counted with its totals so far; null = none (or ESPN has already scored it). */
+  livePeriod: number | null
+  /**
+   * By team (0-based draft slot): actual totals so far in each category (FG% / FT%
+   * from summed makes and attempts) and the league rank in each. Null = no totals
+   * for that team; it isn't ranked.
+   */
+  teams: ({ totals: Record<Category, number>; ranks: Record<Category, number> } | null)[]
+}
+
+/**
+ * League ranks on actual season-to-date category totals: every finished week's
+ * final totals from ESPN's results, plus the week in progress so far (ESPN's
+ * live totals) unless that week is already final. Summed, not averaged: every
+ * team has played the same weeks. Null when nothing has been played yet.
+ */
+export function seasonRanks(results: EspnSync['results'] | undefined, live: EspnSync['live'] | undefined, teams: number): SeasonRanks | null {
+  const sums = new Map<number, WeekTotals>()
+  const add = (slot: number, t: WeekTotals) => {
+    const k = slot - 1
+    if (k < 0 || k >= teams) return
+    const prev = sums.get(k)
+    sums.set(k, prev ? addTotals(prev, t) : t)
+  }
+  const periods = [...new Set((results ?? []).map((r) => r.period))].sort((a, b) => a - b)
+  for (const r of results ?? []) for (const s of [r.home, r.away]) add(s.slot, weekTotals(s.totals))
+  const played = (t: WeekTotals) => t.fga + t.fta + t.pts + t.reb + t.ast + t.tov > 0
+  const livePeriod = live && !periods.includes(live.period) && live.teams.some((t) => played(weekTotals(t.totals))) ? live.period : null
+  if (livePeriod != null) for (const t of live!.teams) add(t.slot, weekTotals(t.totals))
+  const ranked = [...sums.keys()].filter((k) => played(sums.get(k)!)).sort((a, b) => a - b)
+  if (!ranked.length) return null
+  const totals = ranked.map((k) => averageWeek([sums.get(k)!]))
+  const ranks = categoryRanks(totals)
+  const out: SeasonRanks['teams'] = Array.from({ length: teams }, () => null)
+  ranked.forEach((k, i) => (out[k] = { totals: totals[i], ranks: ranks[i] }))
+  return { periods, livePeriod, teams: out }
 }
 
 /** Rank (1 = best) of team `t` by expected categories won per matchup. */

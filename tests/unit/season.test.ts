@@ -113,7 +113,36 @@ describe('in-season store actions', () => {
     delete old.season
     const m = migrateState(old)
     expect(m.ok).toBe(true)
-    if (m.ok) expect(m.state.season).toEqual({ matchups: [], rosterMoves: [], injuries: [], espn: null })
+    if (m.ok) expect(m.state.season).toEqual({ matchups: [], rosterMoves: [], injuries: [], espn: null, streamers: [] })
+  })
+
+  it('tags a player as a streamer and back (a label: rosters and moves are untouched); it persists and re-links', () => {
+    const before = useApp.getState()
+    const rosters = currentRosters([[ids[0], ids[1]]], before.season.rosterMoves).rosters
+    before.toggleStreamer(ids[1])
+    const s = useApp.getState()
+    expect(s.season.streamers).toEqual([ids[1]])
+    expect(s.season.rosterMoves).toBe(before.season.rosterMoves)
+    expect(s.season.injuries).toBe(before.season.injuries)
+    expect(currentRosters([[ids[0], ids[1]]], s.season.rosterMoves).rosters).toEqual(rosters)
+    const exp = s.exportSession(false) as { state: { season: { streamers: string[] } } }
+    expect(exp.state.season.streamers).toEqual([ids[1]])
+    expect(referencedIds(s).has(ids[1])).toBe(true)
+    expect(applyIdRemap(s, new Map([[ids[1], 'renamed-id']])).season?.streamers).toEqual(['renamed-id'])
+    s.toggleStreamer(ids[1])
+    expect(useApp.getState().season.streamers).toEqual([])
+  })
+
+  it('states saved before streamer tags load with none, and the league-ranks toggle off', () => {
+    const old = JSON.parse(JSON.stringify(defaultPersisted())) as { season: Record<string, unknown>; prefs: Record<string, unknown> }
+    delete old.season.streamers
+    delete old.prefs.leagueRanks
+    const m = migrateState(old)
+    expect(m.ok).toBe(true)
+    if (m.ok) {
+      expect(m.state.season.streamers).toEqual([])
+      expect(m.state.prefs.leagueRanks).toBe(false)
+    }
   })
 
   it('session export carries the season, and dataset switches re-link moved players', () => {

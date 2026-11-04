@@ -31,6 +31,7 @@ export function referencedIds(s: Pick<PersistedState, 'draft' | 'undoStack' | 's
   Object.keys(s.overrides).forEach((id) => ids.add(id))
   s.season?.rosterMoves.forEach((m) => ids.add(m.playerId))
   s.season?.injuries.forEach((i) => ids.add(i.playerId))
+  s.season?.streamers.forEach((id) => ids.add(id))
   return ids
 }
 
@@ -94,8 +95,13 @@ export function applyIdRemap<S extends RemappableState>(s: S, map: ReadonlyMap<s
     ...(s.season
       ? {
           season:
-            s.season.rosterMoves.some((mv) => map.has(mv.playerId)) || s.season.injuries.some((i) => map.has(i.playerId))
-              ? { ...s.season, rosterMoves: s.season.rosterMoves.map((mv) => ({ ...mv, playerId: m(mv.playerId) })), injuries: s.season.injuries.map((i) => ({ ...i, playerId: m(i.playerId) })) }
+            s.season.rosterMoves.some((mv) => map.has(mv.playerId)) || s.season.injuries.some((i) => map.has(i.playerId)) || s.season.streamers.some((id) => map.has(id))
+              ? {
+                  ...s.season,
+                  rosterMoves: s.season.rosterMoves.map((mv) => ({ ...mv, playerId: m(mv.playerId) })),
+                  injuries: s.season.injuries.map((i) => ({ ...i, playerId: m(i.playerId) })),
+                  streamers: [...new Set(s.season.streamers.map(m))],
+                }
               : s.season,
         }
       : {}),

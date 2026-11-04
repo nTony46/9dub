@@ -19,6 +19,26 @@ function syntheticSchedule() {
   return { kind: 'nba-schedule', season: '2026-27', asOf: null, source: { file: 'synthetic.pdf', sha256: null }, createdAt: new Date().toISOString(), games, unscheduled: {}, tbdWindow: null }
 }
 
+/**
+ * Synthetic ESPN results for weeks 2–3 (this test's only week is week 1, so it stays projected),
+ * set through the app's own store module: every team's totals differ by slot.
+ */
+async function seedEspnResults(page: Page) {
+  await page.evaluate(async () => {
+    const url = '/src/store/appStore.ts'
+    const { useApp } = await import(/* @vite-ignore */ url)
+    const totals = (slot: number) => ({ pts: 380 + slot * 7, tpm: 40 + slot, reb: 150 + ((slot * 5) % 13), ast: 80 + ((slot * 3) % 11), stl: 20 + (slot % 4), blk: 15 + (slot % 5), tov: 45 + ((slot * 2) % 7), fgm: 140 + slot, fga: 310, ftm: 60 + slot, fta: 85 })
+    const side = (slot: number) => ({ slot, wins: 5, losses: 4, ties: 0, totals: totals(slot), cats: {} })
+    const results = [2, 3].flatMap((period) => Array.from({ length: 6 }, (_, k) => ({ period, home: side(2 * k + 1), away: side(2 * k + 2) })))
+    useApp.setState((s: { season: object }) => ({
+      season: {
+        ...s.season,
+        espn: { syncedAt: Date.now(), leagueId: 1, leagueName: 'Synthetic', changes: [], unmatched: [], players: {}, live: null, teamNames: [], results, standings: [], stats: {}, teamStatus: [], pending: null, lineups: null },
+      },
+    }))
+  })
+}
+
 async function draftTop(page: Page, picks: number) {
   for (let i = 0; i < picks; i++) {
     const name = (await page.getByTestId('player-table').locator('tbody tr').first().locator('td').nth(1).locator('button').first().innerText()).trim()
@@ -58,6 +78,15 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(table.locator(`li[data-player-row="${who}"]`)).toContainText('IR')
   await table.locator(`li[data-player-row="${who}"]`).getByRole('button', { name: /^Activate / }).click()
   await expect(table.locator(`li[data-player-row="${who}"]`).getByRole('button', { name: /^Move .+ to IR$/ })).toBeVisible()
+  // Tag my players as streamers: a label on the row (and on my side of the matchup), nothing else. Untagging takes it off.
+  for (const row of await players.all()) await row.getByRole('button', { name: /^Tag .+ as a streamer$/ }).click()
+  await expect(table.getByTestId('streamer-badge')).toHaveCount(2)
+  const streamerRow = table.locator(`li[data-player-row="${who}"]`)
+  await streamerRow.getByRole('button', { name: /^Untag .+ as a streamer$/ }).click()
+  await expect(streamerRow.getByTestId('streamer-badge')).toHaveCount(0)
+  await expect(table.getByTestId('streamer-badge')).toHaveCount(1)
+  await streamerRow.getByRole('button', { name: /^Tag .+ as a streamer$/ }).click()
+  await expect(streamerRow.getByTestId('streamer-badge')).toHaveText('Streamer')
   // Rename a team in place.
   await page.getByRole('button', { name: 'Rename team' }).click()
   await page.getByLabel('Team name').fill('Test Squad')
@@ -155,6 +184,8 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(mine).toContainText('IR')
   await expect(mine).toContainText('week 14')
   await expect(page.getByTestId('lineup-theirs')).toContainText('week 7')
+  await expect(mine.getByTestId('streamer-badge')).toHaveCount(2)
+  await expect(page.getByTestId('lineup-theirs').getByTestId('streamer-badge')).toHaveCount(0)
 
   // Mark one of my players out: he moves to IR and stops counting; marking him healthy restores it.
   const outBtn = mine.getByRole('button', { name: /^Mark .+ out$/ }).first()
@@ -180,8 +211,33 @@ test('season: post-draft roster moves, schedule import, weekly projection and wh
   await expect(page.getByTestId('roster-moves').locator('li')).toHaveCount(3) // earlier add + pickup + drop
   await page.getByRole('radio', { name: 'Matchups' }).click()
 
-  // Everything survives a reload (schedule cached, season saved).
+  // League ranks, season to date: hidden until ESPN has results; a toggle puts each team's rank under its totals.
+  await expect(page.getByTestId('ranks-toggle')).toHaveCount(0)
+  await seedEspnResults(page)
+  await expect(page.getByTestId('ranks-toggle')).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('rank-mine-PTS')).toHaveCount(0)
+  await page.getByTestId('ranks-toggle').click()
+  await expect(page.getByTestId('ranks-toggle')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('ranks-caption')).toContainText('League rank, season to date: actual ESPN totals, weeks 2–3')
+  // Slot 1 (me) has the fewest points, slot 2 (the opponent) the next fewest; fewer turnovers ranks higher.
+  await expect(page.getByTestId('rank-mine-PTS')).toHaveText('12th')
+  await expect(page.getByTestId('rank-theirs-PTS')).toHaveText('11th')
+  await expect(page.getByTestId('rank-mine-TO')).toHaveText(/^(T-)?\d+(st|nd|rd|th)$/)
+  // The whole league, collapsed until opened, with both matchup teams marked.
+  const league = page.getByTestId('league-ranks')
+  await expect(league.locator('table')).toBeHidden()
+  await league.locator('summary').click()
+  await expect(league.locator('tbody tr')).toHaveCount(12)
+  await expect(league.getByTestId('league-ranks-me')).toContainText('Test Squad')
+  await expect(league.getByTestId('league-ranks-opp')).toContainText('Opponent')
+
+  // Everything survives a reload (schedule cached, season saved, toggles remembered).
   await page.reload()
   await expect(page.getByTestId('matchup-detail')).toBeVisible()
   await expect(page.getByTestId('season-weeks').locator('li')).toHaveCount(1)
+  await expect(page.getByTestId('ranks-toggle')).toHaveAttribute('aria-pressed', 'true')
+  // One tagged player went in the trade; the other keeps his tag, the pickup has none.
+  await page.getByRole('radio', { name: 'Rosters' }).click()
+  await expect(page.getByTestId('roster-table').locator('li[data-player-row]')).toHaveCount(2)
+  await expect(page.getByTestId('roster-table').getByTestId('streamer-badge')).toHaveCount(1)
 })

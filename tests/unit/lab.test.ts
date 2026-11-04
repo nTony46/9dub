@@ -2,7 +2,24 @@ import { describe, expect, it } from 'vitest'
 import type { MatchupPlayer, WeekTotals } from '@/analytics/matchup'
 import { ESPN_DEFAULT_SLOTS } from '@/analytics/positions'
 import type { StatLine } from '@/analytics/types'
-import { applyLab, finishedWeeks, labWeeks, leagueMetrics, lineValues, overallRank, seasonLine, teamWeeks, tierOf, volumeFactor, volumeFactors, type LeagueRates } from '@/features/season/lab'
+import type { EspnTotals } from '@/data/espn'
+import {
+  applyLab,
+  categoryZ,
+  finishedWeeks,
+  labWeeks,
+  leagueMetrics,
+  lineValues,
+  overallRank,
+  seasonLine,
+  seasonRanks,
+  teamWeeks,
+  tierOf,
+  volumeFactor,
+  volumeFactors,
+  type LeagueRates,
+} from '@/features/season/lab'
+import { ordinal } from '@/lib/format'
 import type { EspnSync } from '@/store/schema'
 
 type Span = NonNullable<EspnSync['stats'][string]['season']>
@@ -154,5 +171,84 @@ describe('Roster Lab: applying changes', () => {
     expect(out[0].sort()).toEqual(['p', 'x'])
     expect(out[1].sort()).toEqual(['a', 'y'])
     expect(out[2].sort()).toEqual(['b', 'c', 'q'])
+  })
+})
+
+describe('League ranks, season to date (actual ESPN totals)', () => {
+  const tot = (o: Partial<EspnTotals> = {}): EspnTotals => ({ pts: 400, tpm: 45, reb: 160, ast: 90, stl: 25, blk: 18, tov: 50, fgm: 150, fga: 320, ftm: 70, fta: 90, ...o })
+  const side = (slot: number, totals: EspnTotals) => ({ slot, wins: 0, losses: 0, ties: 0, totals, cats: {} })
+  const result = (period: number, home: [number, EspnTotals], away: [number, EspnTotals]): EspnSync['results'][number] => ({ period, home: side(...home), away: side(...away) })
+  const live = (period: number, teams: [number, EspnTotals][]): NonNullable<EspnSync['live']> => ({
+    period,
+    asOf: '2026-11-04T20:00:00.000Z',
+    fromDate: '2026-11-04',
+    started: [],
+    teams: teams.map(([slot, totals]) => ({ slot, totals })),
+  })
+
+  it('ranks FG% and FT% on summed makes over summed attempts, not the average of weekly percentages', () => {
+    // Slot 1: 90/200 then 2/10 → 92/210 = .438 (weekly average .325). Slot 2: 40/100 twice → .400.
+    const results = [result(1, [1, tot({ fgm: 90, fga: 200, ftm: 9, fta: 10 })], [2, tot({ fgm: 40, fga: 100, ftm: 40, fta: 50 })]), result(2, [1, tot({ fgm: 2, fga: 10, ftm: 1, fta: 10 })], [2, tot({ fgm: 40, fga: 100, ftm: 40, fta: 50 })])]
+    const r = seasonRanks(results, null, 2)!
+    expect(r.teams[0]!.totals.FG).toBeCloseTo(92 / 210)
+    expect(r.teams[0]!.ranks.FG).toBe(1)
+    expect(r.teams[1]!.ranks.FG).toBe(2)
+    // FT: 10/20 = .500 against 80/100 = .800 (the weekly average would be .55 vs .80: same order, but the value is the summed one).
+    expect(r.teams[0]!.totals.FT).toBeCloseTo(0.5)
+    expect(r.teams[0]!.ranks.FT).toBe(2)
+    // Counting categories are season totals.
+    expect(r.teams[0]!.totals.PTS).toBe(800)
+    expect(r.periods).toEqual([1, 2])
+    expect(r.livePeriod).toBeNull()
+  })
+
+  it('ranks fewer turnovers higher, and tied teams share the better rank', () => {
+    const results = [result(1, [1, tot({ tov: 40, pts: 500 })], [2, tot({ tov: 60, pts: 500 })]), result(1, [3, tot({ tov: 50, pts: 450 })], [4, tot({ tov: 40, pts: 400 })])]
+    const r = seasonRanks(results, null, 4)!
+    expect(r.teams.map((t) => t!.ranks.TO)).toEqual([1, 4, 3, 1])
+    expect(r.teams.map((t) => t!.ranks.PTS)).toEqual([1, 1, 3, 4])
+    // Heat: better is positive, fewer turnovers included.
+    const z = categoryZ(r.teams.map((t) => t!.totals))
+    expect(z[0].TO).toBeGreaterThan(0)
+    expect(z[1].TO).toBeLessThan(0)
+    expect(z[0].PTS).toBeCloseTo(z[1].PTS)
+  })
+
+  it('adds the week in progress so far, unless ESPN has already scored it', () => {
+    const results = [result(1, [1, tot({ reb: 100 })], [2, tot({ reb: 150 })])]
+    const now = live(2, [
+      [1, tot({ reb: 80 })],
+      [2, tot({ reb: 10 })],
+    ])
+    const r = seasonRanks(results, now, 2)!
+    expect(r.livePeriod).toBe(2)
+    expect(r.teams[0]!.totals.REB).toBe(180)
+    expect(r.teams[0]!.ranks.REB).toBe(1)
+    // Week 2 already final: its live totals aren't counted twice.
+    const twice = seasonRanks([...results, result(2, [1, tot({ reb: 80 })], [2, tot({ reb: 10 })])], now, 2)!
+    expect(twice.livePeriod).toBeNull()
+    expect(twice.teams[0]!.totals.REB).toBe(180)
+    // A week in progress with nothing played yet adds nothing.
+    const zero = tot({ pts: 0, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, ftm: 0, fta: 0 })
+    expect(seasonRanks(results, live(2, [[1, zero], [2, zero]]), 2)!.livePeriod).toBeNull()
+  })
+
+  it('is empty before anything is played; teams without totals are left unranked', () => {
+    const zero = tot({ pts: 0, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga: 0, ftm: 0, fta: 0 })
+    expect(seasonRanks(undefined, null, 12)).toBeNull()
+    expect(seasonRanks([], undefined, 12)).toBeNull()
+    expect(seasonRanks([], live(1, [[1, zero], [2, zero]]), 12)).toBeNull()
+    // Only the week in progress: ranked on it, teams outside the league ignored.
+    const r = seasonRanks([], live(1, [[1, tot()], [2, tot({ stl: 30 })], [13, tot({ stl: 99 })]]), 3)!
+    expect(r.periods).toEqual([])
+    expect(r.livePeriod).toBe(1)
+    expect(r.teams).toHaveLength(3)
+    expect(r.teams[2]).toBeNull()
+    expect(r.teams[1]!.ranks.STL).toBe(1)
+    expect(r.teams[0]!.ranks.STL).toBe(2)
+  })
+
+  it('writes ordinals', () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112].map(ordinal)).toEqual(['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st', '111th', '112th'])
   })
 })

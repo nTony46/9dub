@@ -51,6 +51,15 @@ export function RiskBadge({ label, pick }: { label: RiskLabel | null; pick?: num
   )
 }
 
+/** The tag on one of your players you've marked as a streamer (a label only). */
+export function StreamerBadge() {
+  return (
+    <Badge tone="neutral" className="shrink-0" data-testid="streamer-badge">
+      Streamer
+    </Badge>
+  )
+}
+
 export function StarButton({ on, onToggle, name }: { on: boolean; onToggle: () => void; name: string }) {
   return (
     <button

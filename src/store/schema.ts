@@ -92,6 +92,8 @@ export const PrefsSchema = z.object({
   setupDone: z.boolean().default(false),
   /** The waiver wire is shown on the matchup page. */
   waiverWire: z.boolean().default(true),
+  /** The matchup's category table shows each team's league rank, season to date. */
+  leagueRanks: z.boolean().default(false),
 })
 export type Prefs = z.infer<typeof PrefsSchema>
 
@@ -201,6 +203,8 @@ export const SeasonSchema = z.object({
   rosterMoves: z.array(RosterMoveSchema).default([]),
   injuries: z.array(InjurySchema).default([]),
   espn: EspnSyncSchema.nullable().default(null),
+  /** Your players you've tagged as streamers: a label only, nothing is computed from it. */
+  streamers: z.array(z.string()).default([]),
 })
 export type SeasonState = z.infer<typeof SeasonSchema>
 
@@ -228,7 +232,7 @@ export const PersistedStateSchema = z.object({
   /** Recent prior draft states so "Undo" still works after a refresh (bounded). */
   undoStack: z.array(DraftSessionSchema).default([]),
   /** In-season: matchup schedule and post-draft roster changes. Optional for states saved before it existed. */
-  season: SeasonSchema.default({ matchups: [], rosterMoves: [], injuries: [], espn: null }),
+  season: SeasonSchema.default({ matchups: [], rosterMoves: [], injuries: [], espn: null, streamers: [] }),
 })
 export type PersistedState = z.infer<typeof PersistedStateSchema>
 

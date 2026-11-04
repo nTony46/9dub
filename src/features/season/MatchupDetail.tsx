@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowRight, ArrowUp, Bandage, PanelLeftClose, UserPlus, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Bandage, ListOrdered, PanelLeftClose, UserPlus, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
@@ -6,17 +6,20 @@ import { CATEGORIES, CATEGORY_META, type Category } from '@/analytics/categories
 import { chaseVerdict, defaultTargets, OUTLOOK_TEXT, outlookOf, pickupDeltas, targetFit, type Outlook, type PickupResult } from '@/analytics/chase'
 import { scoreText, weekTotals, type CategoryCall, type DaySlate, type SideProjection, type WeekCall, type WeekTotals as Totals } from '@/analytics/matchup'
 import { POSITIONS, type Position } from '@/analytics/positions'
-import { Positions } from '@/components/PlayerBits'
+import { Positions, StreamerBadge } from '@/components/PlayerBits'
 import { Badge } from '@/components/ui/Badge'
 import { Button, IconButton } from '@/components/ui/Button'
 import { Segmented, Select, Switch } from '@/components/ui/Controls'
 import { Tip } from '@/components/ui/Tooltip'
 import { cn } from '@/lib/cn'
+import { leagueHeat } from '@/lib/diverging'
+import { ordinal } from '@/lib/format'
 import { useApp } from '@/store/appStore'
 import { localDate } from '@/data/espn'
 import { teamLabel, type EngineData, type PlayerInfo } from '@/store/derived'
 import { applyTrade, irPlacement, todayIso, type TradeDraft } from '@/store/season'
 import type { EspnSync, MatchupWeek } from '@/store/schema'
+import { categoryZ, seasonRanks, type SeasonRanks } from './lab'
 import { PlayerPicker } from './PlayerPicker'
 import { WeekGrid } from './WeekGrid'
 import { actualLine, chasePlan, dayLabel, lineSource, useWirePlacement, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
@@ -132,6 +135,12 @@ export function MatchupDetail({
     [basis, plan, engine, index, rosters, me, opp, week.start, week.end, opts, live, pool, drop, today, firstDay, lineFor],
   )
   const myStatus = teamStatus?.find((t) => t.slot === me + 1)
+  // League ranks on actual totals so far this season (ESPN's finished weeks and the week in progress).
+  const espnResults = useApp((s) => s.season.espn?.results)
+  const standings = useApp((s) => s.season.espn?.standings)
+  const ranks = useMemo(() => seasonRanks(espnResults, espnLive, settings.teams), [espnResults, espnLive, settings.teams])
+  const ranksPref = useApp((s) => s.prefs.leagueRanks)
+  const showRanks = ranksPref && !!ranks
 
   const { call } = proj
   const oppLabel = opp == null ? 'No opponent' : opp === week.opponent ? opponentName(settings, week) : teamLabel(settings, opp)
@@ -229,6 +238,20 @@ export function MatchupDetail({
           <UserPlus size={13} />
           Waiver wire
         </Button>
+        {ranks ? (
+          <Button
+            size="xs"
+            variant={showRanks ? 'subtle' : 'ghost'}
+            aria-pressed={showRanks}
+            title={showRanks ? 'Hide league ranks' : 'Show each team’s league rank in every category, season to date'}
+            onClick={() => setPrefs({ leagueRanks: !showRanks })}
+            className={cn(showRanks && 'border-clock-line text-clock')}
+            data-testid="ranks-toggle"
+          >
+            <ListOrdered size={13} />
+            League ranks
+          </Button>
+        ) : null}
         {started ? (
           <Segmented<'projected' | 'current'>
             label="Category totals"
@@ -244,8 +267,22 @@ export function MatchupDetail({
       </div>
 
       <div className="mt-3 overflow-x-auto px-5 pb-2">
-        <CategoryTable proj={proj} current={current} myName={myName} oppName={oppLabel} plan={plan} name={(id) => engine.byId.get(id)?.name ?? id} />
+        <CategoryTable
+          proj={proj}
+          current={current}
+          myName={myName}
+          oppName={oppLabel}
+          plan={plan}
+          name={(id) => engine.byId.get(id)?.name ?? id}
+          ranks={showRanks ? { data: ranks!, me, opp } : null}
+        />
       </div>
+      {showRanks ? (
+        <p className="px-5 pb-2 text-[12px] text-chalk-3" data-testid="ranks-caption">
+          League rank, season to date: actual ESPN totals, {ranksSpan(ranks!)}. 1st = best; fewer turnovers ranks higher; ties share a rank.
+        </p>
+      ) : null}
+      {ranks ? <LeagueRanks ranks={ranks} me={me} opp={opp} standings={standings} /> : null}
 
       {placement === 'inline' ? wire : null}
       {placement === 'dock' && dock ? createPortal(wire, dock) : null}
@@ -468,6 +505,7 @@ function CategoryTable({
   oppName,
   plan,
   name,
+  ranks,
 }: {
   proj: WeekProjection
   current: boolean
@@ -475,10 +513,14 @@ function CategoryTable({
   oppName: string
   plan: ChasePlan | null
   name: (id: string) => string
+  /** Season-to-date league ranks to show under each total (null = off). */
+  ranks: { data: SeasonRanks; me: number; opp: number | null } | null
 }) {
   const { call, me, them } = proj
   const live = current ? proj.live : null
   const shown = live ? live.now : call
+  const rankData = ranks?.data ?? null
+  const heat = useMemo(() => (rankData ? rankHeat(rankData) : null), [rankData])
   return (
     <table className="w-full min-w-[720px] border-separate border-spacing-0 text-[14px]" data-testid="matchup-categories" data-mode={live ? 'current' : 'projected'}>
       <thead>
@@ -507,6 +549,7 @@ function CategoryTable({
       <tbody>
         {(['mine', 'theirs'] as const).map((side) => {
           const s = side === 'mine' ? me : them
+          const team = ranks ? (side === 'mine' ? ranks.me : ranks.opp) : null
           return (
             <tr key={side}>
               <td className={cn('h-11 max-w-[170px] truncate border-b border-seam pr-3 font-medium', side === 'mine' ? 'text-clock' : 'text-chalk')}>{side === 'mine' ? myName : oppName}</td>
@@ -514,17 +557,29 @@ function CategoryTable({
               {shown.calls.map((c, i) => {
                 const won = c.winner === (side === 'mine' ? 'me' : 'them')
                 const now = proj.live ? catValue(side === 'mine' ? proj.live.me : proj.live.them, c.cat) : null
+                const value = proj.live ? (
+                  <Tip content={live ? `Projected final ${fmtCat(c.cat, call.calls[i][side])}` : `So far ${fmtCat(c.cat, now)} (ESPN) · projected final ${fmtCat(c.cat, c[side])}`}>
+                    <span>{(live ? fmtNow : fmtCat)(c.cat, c[side])}</span>
+                  </Tip>
+                ) : (
+                  fmtCat(c.cat, c[side])
+                )
                 return (
                   <td
                     key={c.cat}
-                    className={cn('border-b border-seam px-2 text-right font-mono tnum', won ? 'font-semibold text-chalk' : 'text-chalk-2', won && (side === 'mine' ? 'bg-plus/12' : 'bg-minus/12'))}
+                    className={cn('border-b border-seam px-2 text-right font-mono tnum', won ? 'font-semibold text-chalk' : 'text-chalk-2', won && (side === 'mine' ? 'bg-plus/12' : 'bg-minus/12'), ranks && 'py-1')}
                   >
-                    {proj.live ? (
-                      <Tip content={live ? `Projected final ${fmtCat(c.cat, call.calls[i][side])}` : `So far ${fmtCat(c.cat, now)} (ESPN) · projected final ${fmtCat(c.cat, c[side])}`}>
-                        <span>{(live ? fmtNow : fmtCat)(c.cat, c[side])}</span>
-                      </Tip>
+                    {ranks ? (
+                      <>
+                        <div>{value}</div>
+                        {team != null && ranks.data.teams[team] ? (
+                          <RankChip ranks={ranks.data} team={team} cat={c.cat} z={heat?.[team]?.[c.cat] ?? null} testId={`rank-${side}-${c.cat}`} />
+                        ) : (
+                          <div className="text-[11px] text-chalk-4">—</div>
+                        )}
+                      </>
                     ) : (
-                      fmtCat(c.cat, c[side])
+                      value
                     )}
                   </td>
                 )
@@ -552,6 +607,154 @@ function CategoryTable({
         </tr>
       </tbody>
     </table>
+  )
+}
+
+/** The weeks the ranks count, e.g. "weeks 1–3 + week 4 so far". */
+function ranksSpan(r: SeasonRanks): string {
+  const p = r.periods
+  const done = !p.length ? '' : p.length === 1 ? `week ${p[0]}` : p[p.length - 1] - p[0] + 1 === p.length ? `weeks ${p[0]}–${p[p.length - 1]}` : `${p.length} weeks`
+  return [done, r.livePeriod != null ? `week ${r.livePeriod} so far` : ''].filter(Boolean).join(' + ')
+}
+
+/** Heat for each ranked team: its z-score in each category's season totals (fewer turnovers = better); null = not ranked. */
+function rankHeat(r: SeasonRanks): (Record<Category, number> | null)[] {
+  const ranked = r.teams.flatMap((t, k) => (t ? [k] : []))
+  const z = categoryZ(ranked.map((k) => r.teams[k]!.totals))
+  const out: (Record<Category, number> | null)[] = r.teams.map(() => null)
+  ranked.forEach((k, i) => (out[k] = z[i]))
+  return out
+}
+
+/** Teams sharing team `t`'s rank in a category (0 = alone). */
+const tiedWith = (r: SeasonRanks, t: number, c: Category) => r.teams.filter((x, k) => k !== t && x && x.ranks[c] === r.teams[t]!.ranks[c]).length
+const fmtSeason = (c: Category, v: number) => (c === 'FG' || c === 'FT' ? pct3(v) : Math.round(v).toLocaleString())
+
+/** A team's league rank in one category ("1st", "T-3rd"), heat-filled like the Roster Lab's League table. */
+function RankChip({ ranks, team, cat, z, testId }: { ranks: SeasonRanks; team: number; cat: Category; z: number | null; testId: string }) {
+  const t = ranks.teams[team]!
+  const tied = tiedWith(ranks, team, cat)
+  const of = ranks.teams.filter(Boolean).length
+  return (
+    <Tip
+      content={
+        <div className="space-y-0.5">
+          <div className="font-medium text-chalk">League rank, season to date</div>
+          <div>
+            {CATEGORY_META[cat].name}: {ordinal(t.ranks[cat])} of {of}
+            {tied ? ` (tied with ${tied} other${tied === 1 ? '' : 's'})` : ''} · {fmtSeason(cat, t.totals[cat])}
+          </div>
+          <div className="text-chalk-3">ESPN totals, {ranksSpan(ranks)}.{cat === 'TO' ? ' Fewer turnovers = better.' : ''}</div>
+        </div>
+      }
+    >
+      <span
+        className="on-heat mt-0.5 inline-flex h-4 items-center rounded-[3px] px-1 font-mono text-[10.5px] font-semibold leading-none tabular-nums text-chalk"
+        style={{ background: leagueHeat(z) }}
+        data-testid={testId}
+      >
+        {tied ? 'T-' : ''}
+        {ordinal(t.ranks[cat])}
+      </span>
+    </Tip>
+  )
+}
+
+/**
+ * Every team's league rank in each category on actual totals so far this
+ * season (ESPN's scores), with this matchup's two teams highlighted. Ordered
+ * by ESPN's standings; a column sorts by that category.
+ */
+function LeagueRanks({ ranks, me, opp, standings }: { ranks: SeasonRanks; me: number; opp: number | null; standings: EspnSync['standings'] | undefined }) {
+  const settings = useApp((s) => s.settings)
+  const [sort, setSort] = useState<Category | 'place'>('place')
+  const heat = useMemo(() => rankHeat(ranks), [ranks])
+  const of = ranks.teams.filter(Boolean).length
+  const standing = (t: number) => standings?.find((x) => x.slot === t + 1)
+  const order = ranks.teams
+    .flatMap((x, t) => (x ? [t] : []))
+    .sort((a, b) => (sort === 'place' ? (standing(a)?.rank ?? 99) - (standing(b)?.rank ?? 99) : ranks.teams[a]!.ranks[sort] - ranks.teams[b]!.ranks[sort]) || a - b)
+  const header = (key: Category, label: string, title: string) => (
+    <th key={key} className="h-9 border-b border-seam-strong px-0.5 text-center align-middle" aria-sort={sort === key ? 'ascending' : undefined}>
+      <button
+        type="button"
+        onClick={() => setSort(key)}
+        title={title}
+        className={cn('font-display text-[12.5px] font-semibold tracking-wide', sort === key ? 'text-chalk underline decoration-clock decoration-2 underline-offset-4' : 'text-chalk-3 hover:text-chalk')}
+      >
+        {label}
+      </button>
+    </th>
+  )
+  return (
+    <details className="group border-t border-seam px-5 py-3" data-testid="league-ranks">
+      <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 gap-y-0.5 py-1 text-[13px] font-medium text-chalk-2 hover:text-chalk">
+        <span className="label-caps">League ranks</span>
+        <span className="text-[12.5px] font-normal text-chalk-3">Season to date · ESPN totals, {ranksSpan(ranks)}</span>
+        <span className="text-[12.5px] font-normal text-chalk-3 group-open:hidden">Show</span>
+      </summary>
+      <p className="mt-1 text-[12px] text-chalk-3">Every team’s rank in each category (1 = best; fewer turnovers ranks higher; ties share a rank). Click a column to sort.</p>
+      <div className="mt-2 overflow-x-auto rounded-md border border-seam">
+        <table className="w-full min-w-[600px] border-separate border-spacing-0 text-[12.5px]">
+          <thead>
+            <tr>
+              <th className="h-9 border-b border-seam-strong px-3 text-left" aria-sort={sort === 'place' ? 'ascending' : undefined}>
+                <button type="button" onClick={() => setSort('place')} title={standings?.length ? 'Sort by standings' : 'Sort by draft slot'} className={cn('label-caps', sort === 'place' && 'text-chalk')}>
+                  Team
+                </button>
+              </th>
+              {CATEGORIES.map((c) => header(c, CATEGORY_META[c].label, `Sort by ${CATEGORY_META[c].name} rank`))}
+            </tr>
+          </thead>
+          <tbody>
+            {order.map((t) => {
+              const st = standing(t)
+              const played = st && st.wins + st.losses + st.ties > 0
+              return (
+                <tr key={t} className={cn(t === me ? 'bg-clock-soft/50' : t === opp && 'bg-stand/70')} data-testid={t === me ? 'league-ranks-me' : t === opp ? 'league-ranks-opp' : undefined}>
+                  <td className="h-10 border-b border-seam px-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn('max-w-[180px] truncate font-medium', t === me ? 'text-clock' : 'text-chalk')}>{teamLabel(settings, t)}</span>
+                      {t === opp ? <Badge tone="outline">Opponent</Badge> : null}
+                    </div>
+                    <div className="text-[10.5px] text-chalk-4">{played ? `${scoreText(st)}${st.rank ? ` · ${ordinal(st.rank)}` : ''}` : `slot ${t + 1}`}</div>
+                  </td>
+                  {CATEGORIES.map((c) => {
+                    const r = ranks.teams[t]!.ranks[c]
+                    const tied = tiedWith(ranks, t, c)
+                    return (
+                      <td key={c} className="border-b border-seam p-[2px]">
+                        <Tip
+                          content={
+                            <div className="space-y-0.5">
+                              <div className="font-medium text-chalk">
+                                {teamLabel(settings, t)} · {CATEGORY_META[c].name}
+                              </div>
+                              <div>
+                                {fmtSeason(c, ranks.teams[t]!.totals[c])} · rank {r} of {of}
+                                {tied ? ` (tied with ${tied} other${tied === 1 ? '' : 's'})` : ''}
+                              </div>
+                              {c === 'TO' ? <div className="text-chalk-3">Fewer turnovers = better.</div> : null}
+                            </div>
+                          }
+                        >
+                          <div
+                            className="on-heat flex h-9 min-w-[46px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-semibold tabular-nums text-chalk"
+                            style={{ background: leagueHeat(heat[t]?.[c]) }}
+                          >
+                            {tied ? `T${r}` : r}
+                          </div>
+                        </Tip>
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
   )
 }
 
@@ -963,6 +1166,7 @@ function LineupCard({
   const rounds = useApp((s) => s.settings.rounds)
   const setInjury = useApp((s) => s.setInjury)
   const openPreview = useApp((s) => s.openPreview)
+  const streamers = useApp((s) => s.season.streamers)
   const games = index.gameOf.get(day.date)
   const { ir } = irPlacement(roster, injuries, irSlots, day.date)
   const onIr = new Set(ir)
@@ -991,6 +1195,7 @@ function LineupCard({
             </button>
             <Positions positions={p.positions} className="hidden shrink-0 text-[11px] sm:inline" />
             <SourceTag p={p} />
+            {mine && streamers.includes(id) ? <StreamerBadge /> : null}
             <span className={cn('ml-auto shrink-0 font-mono text-[12.5px] tnum', tone ?? 'text-chalk-2')}>{note ?? (p.team ? (games?.get(p.team) ?? 'no game') : 'FA')}</span>
             <button
               type="button"
@@ -1281,6 +1486,7 @@ function WeekTotals({
 }) {
   const [who, setWho] = useState<'me' | 'them'>('me')
   const openPreview = useApp((s) => s.openPreview)
+  const streamers = useApp((s) => s.season.streamers)
   const side = who === 'me' ? proj.me : proj.them
   const ids = who === 'me' ? roster.me : roster.them
   const full = engine.valuation.settings.fullSeasonGames
@@ -1331,6 +1537,7 @@ function WeekTotals({
                         <span className="shrink-0 text-[12px] text-chalk-3">{p?.team ?? 'FA'}</span>
                         {w?.missed ? <Badge tone="bad">out {w.missed}g</Badge> : null}
                         {p ? <SourceTag p={p} /> : null}
+                        {who === 'me' && streamers.includes(id) ? <StreamerBadge /> : null}
                       </span>
                     </td>
                     <td className={cn('px-2 text-right font-mono tnum', w?.benched ? 'text-warn' : 'text-chalk-2')}>{w && l ? `${w.starts} / ${w.games}` : '—'}</td>
