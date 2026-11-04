@@ -136,15 +136,23 @@ describe('Roster Lab: applying changes', () => {
   ]
 
   it('swaps your players for pickups, an add with no drop fills an open spot', () => {
-    const out = applyLab(rosters, 0, [{ drop: 'b', add: 'fa1' }, { drop: null, add: 'fa2' }, { drop: 'c', add: null }], null)
+    const out = applyLab(rosters, 0, [{ drop: 'b', add: 'fa1' }, { drop: null, add: 'fa2' }, { drop: 'c', add: null }], [])
     expect(out[0]).toEqual(['a', 'c', 'fa1', 'fa2'])
     expect(out[1]).toEqual(['x', 'y'])
     expect(rosters[0]).toEqual(['a', 'b', 'c']) // inputs untouched
   })
 
   it('moves trade players both ways, after the pickups', () => {
-    const out = applyLab(rosters, 0, [{ drop: 'a', add: 'fa1' }], { team: 1, give: ['b'], get: ['x', 'y'] })
+    const out = applyLab(rosters, 0, [{ drop: 'a', add: 'fa1' }], [{ team: 1, give: ['b'], get: ['x', 'y'] }])
     expect(out[0].sort()).toEqual(['c', 'fa1', 'x', 'y'])
     expect(out[1]).toEqual(['b'])
+  })
+
+  it('makes several trades in order, with different teams, skipping empty ones', () => {
+    const three = [['a', 'b', 'c'], ['x', 'y'], ['p', 'q']]
+    const out = applyLab(three, 0, [], [{ team: 1, give: ['a'], get: ['x'] }, { team: 2, give: [], get: [] }, { team: 2, give: ['b', 'c'], get: ['p'] }])
+    expect(out[0].sort()).toEqual(['p', 'x'])
+    expect(out[1].sort()).toEqual(['a', 'y'])
+    expect(out[2].sort()).toEqual(['b', 'c', 'q'])
   })
 })

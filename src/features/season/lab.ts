@@ -342,15 +342,16 @@ export function tierOf(wins: number, opponents: number): 'win' | 'swing' | 'punt
   return r >= 7 / 11 ? 'win' : r >= 4 / 11 ? 'swing' : 'punt'
 }
 
-/** Rosters after the changes: your swaps, then the trade (players move both ways). */
-export function applyLab(rosters: readonly (readonly string[])[], me: number, changes: readonly LabChange[], trade: LabTrade | null): string[][] {
+/** Rosters after the changes: your swaps, then each trade in order (players move both ways). */
+export function applyLab(rosters: readonly (readonly string[])[], me: number, changes: readonly LabChange[], trades: readonly LabTrade[]): string[][] {
   const out = rosters.map((r) => [...r])
   for (const c of changes) {
     if (!c.add) continue
     if (c.drop) out[me] = out[me].filter((id) => id !== c.drop)
     if (!out[me].includes(c.add)) out[me].push(c.add)
   }
-  if (trade && (trade.give.length || trade.get.length) && trade.team !== me && out[trade.team]) {
+  for (const trade of trades) {
+    if (!(trade.give.length || trade.get.length) || trade.team === me || !out[trade.team]) continue
     out[me] = out[me].filter((id) => !trade.give.includes(id)).concat(trade.get.filter((id) => !out[me].includes(id)))
     out[trade.team] = out[trade.team].filter((id) => !trade.get.includes(id)).concat(trade.give.filter((id) => !out[trade.team].includes(id)))
   }

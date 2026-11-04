@@ -56,8 +56,9 @@ function heatOf(m: LabMetrics): { cats: Record<Category, number>; strength: numb
 
 /**
  * Roster Lab: try waiver pickups (any of your players for any free agent or
- * waiver player, as many changes as you like) and a trade, and see how your
- * league ranks and matchup odds move over the rest of the regular season.
+ * waiver player, as many changes as you like) and trades (one or more, with
+ * any teams), and see how your league ranks and matchup odds move over the
+ * rest of the regular season.
  */
 export function RosterLab() {
   const engine = useEngine()
@@ -73,7 +74,8 @@ export function RosterLab() {
   const today = todayIso()
   const [basisPick, setBasis] = useState<LabBasis>('season')
   const [changes, setChanges] = useState<LabChange[]>([{ drop: null, add: null }])
-  const [trade, setTrade] = useState<LabTrade | null>(null)
+  // One builder per trade; null until a partner is picked.
+  const [trades, setTrades] = useState<(LabTrade | null)[]>([null])
 
   const active = useMemo(() => rosters.map((r) => irPlacement(r, injuriesList, settings.irSlots, today).active), [rosters, injuriesList, settings.irSlots, today])
   // The season basis needs this season's stats for (nearly) every rostered player; syncs before the Roster Lab kept only some.
@@ -107,12 +109,13 @@ export function RosterLab() {
   const scenario = useMemo(() => {
     if (!lab || me == null) return null
     const valid = changes.filter((c) => c.add)
-    const t = trade && (trade.give.length || trade.get.length) ? trade : null
-    if (!valid.length && !t) return null
-    const ros = applyLab(active, me, valid, t)
-    const weeksNow = lab.base.map((w, k) => (k === me || k === t?.team ? lab.project(ros[k], k) : w))
-    return { metrics: leagueMetrics(weeksNow, me, lab.top4), partner: t?.team ?? null, rosters: ros }
-  }, [lab, me, changes, trade, active])
+    const ts = trades.filter((t): t is LabTrade => !!t && (t.give.length > 0 || t.get.length > 0))
+    if (!valid.length && !ts.length) return null
+    const ros = applyLab(active, me, valid, ts)
+    const partners = [...new Set(ts.map((t) => t.team))]
+    const weeksNow = lab.base.map((w, k) => (k === me || partners.includes(k) ? lab.project(ros[k], k) : w))
+    return { metrics: leagueMetrics(weeksNow, me, lab.top4), partners, rosters: ros }
+  }, [lab, me, changes, trades, active])
 
   if (!engine) return <Empty title="No player data loaded" />
   if (me == null) return <Empty title="Pick your team first">Set your draft slot in Settings → League to try roster changes.</Empty>
@@ -122,11 +125,14 @@ export function RosterLab() {
 
   const mine = active[me]
   const name = (id: string) => engine.byId.get(id)?.name ?? id
-  const used = new Set([...changes.flatMap((c) => [c.drop, c.add]), ...(trade?.give ?? []), ...(trade?.get ?? [])].filter((x): x is string => !!x))
+  const pickups = changes.flatMap((c) => [c.drop, c.add]).filter((x): x is string => !!x)
+  const traded = (skip: number) => trades.flatMap((t, k) => (t && k !== skip ? [...t.give, ...t.get] : []))
+  const used = new Set([...pickups, ...traded(-1)])
   const setChange = (i: number, patch: Partial<LabChange>) => setChanges((cs) => cs.map((c, k) => (k === i ? { ...c, ...patch } : c)))
+  const setTradeAt = (i: number, t: LabTrade | null) => setTrades((ts) => ts.map((x, k) => (k === i ? t : x)))
   const reset = () => {
     setChanges([{ drop: null, add: null }])
-    setTrade(null)
+    setTrades([null])
   }
   const after = scenario?.metrics ?? null
   const base = lab.metrics
@@ -135,7 +141,7 @@ export function RosterLab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <p className="max-w-[860px] text-[13px] leading-snug text-chalk-3">
-          Try pickups and a trade, then see how your league ranks and matchup odds move over the rest of the regular season ({lab.weeks} week{lab.weeks === 1 ? '' : 's'}): every team’s weeks are projected
+          Try pickups and trades, then see how your league ranks and matchup odds move over the rest of the regular season ({lab.weeks} week{lab.weeks === 1 ? '' : 's'}): every team’s weeks are projected
           with the daily lineup engine on the real NBA schedule and compared category by category with every other team.
         </p>
         <div className="ml-auto flex items-center gap-2">
@@ -152,7 +158,7 @@ export function RosterLab() {
           ) : (
             <span className="text-[12.5px] text-chalk-3">Projections · Refresh from ESPN for this season’s stats</span>
           )}
-          <Button variant="subtle" size="sm" onClick={reset} disabled={!scenario}>
+          <Button variant="subtle" size="sm" onClick={reset} disabled={!scenario && changes.length === 1 && trades.length === 1 && !trades[0]}>
             Reset
           </Button>
         </div>
@@ -199,8 +205,26 @@ export function RosterLab() {
           </div>
         </Panel>
 
-        <Panel title="See how a trade performs" subtitle="Players move both ways, so the other team’s weeks change too, and so do your ranks against them.">
-          <TradeBuilder engine={engine} me={me} rosters={active} trade={trade} setTrade={setTrade} used={used} teamName={(t) => teamLabel(settings, t)} />
+        <Panel title="See how trades perform" subtitle="Players move both ways, so the other teams’ weeks change too, and so do your ranks against them. Trades stack.">
+          <div className="space-y-3">
+            {trades.map((t, i) => (
+              <div key={i} className={cn(i > 0 && 'border-t border-seam pt-3')} data-testid={`lab-trade-${i}`}>
+                <TradeBuilder
+                  engine={engine}
+                  me={me}
+                  rosters={active}
+                  trade={t}
+                  setTrade={(x) => setTradeAt(i, x)}
+                  used={new Set([...pickups, ...traded(i)])}
+                  teamName={(k) => teamLabel(settings, k)}
+                  onRemove={trades.length > 1 ? () => setTrades((ts) => ts.filter((_, k) => k !== i)) : undefined}
+                />
+              </div>
+            ))}
+            <Button variant="ghost" size="sm" onClick={() => setTrades((ts) => [...ts, null])} data-testid="lab-add-trade">
+              <Plus size={14} /> Add another trade
+            </Button>
+          </div>
         </Panel>
       </div>
 
@@ -210,7 +234,7 @@ export function RosterLab() {
         base={base}
         after={after}
         me={me}
-        partner={scenario?.partner ?? null}
+        partners={scenario?.partners ?? []}
         players={(scenario?.rosters ?? active).map((r) => r.length)}
         teamName={(t) => teamLabel(settings, t)}
       />
@@ -312,14 +336,17 @@ function TradeBuilder({
   setTrade,
   used,
   teamName,
+  onRemove,
 }: {
   engine: EngineData
   me: number
   rosters: string[][]
   trade: LabTrade | null
   setTrade: (t: LabTrade | null) => void
+  /** Players already in a pickup or another trade. */
   used: Set<string>
   teamName: (t: number) => string
+  onRemove?: () => void
 }) {
   const name = (id: string) => engine.byId.get(id)?.name ?? id
   const others = rosters.map((_, t) => t).filter((t) => t !== me)
@@ -334,7 +361,7 @@ function TradeBuilder({
         .sort((a, b) => name(a).localeCompare(name(b)))
         .map((id) => {
           const on = trade?.[side].includes(id) ?? false
-          const blocked = !on && side === 'give' && used.has(id)
+          const blocked = !on && used.has(id)
           return (
             <button
               key={id}
@@ -370,6 +397,11 @@ function TradeBuilder({
           <Button variant="ghost" size="xs" onClick={() => setTrade(null)}>
             Clear trade
           </Button>
+        ) : null}
+        {onRemove ? (
+          <IconButton label="Remove this trade" className="ml-auto" onClick={onRemove}>
+            <X size={14} />
+          </IconButton>
         ) : null}
       </div>
       {trade ? (
@@ -469,14 +501,14 @@ function LeagueTable({
   base,
   after,
   me,
-  partner,
+  partners,
   players,
   teamName,
 }: {
   base: LabMetrics
   after: LabMetrics | null
   me: number
-  partner: number | null
+  partners: readonly number[]
   players: number[]
   teamName: (t: number) => string
 }) {
@@ -529,7 +561,7 @@ function LeagueTable({
                   <td className="h-10 border-b border-seam px-3">
                     <div className="flex items-center gap-1.5">
                       <span className={cn('truncate font-medium', t === me ? 'text-clock' : 'text-chalk')}>{teamName(t)}</span>
-                      {t === partner ? <Badge tone="outline">Trade</Badge> : null}
+                      {partners.includes(t) ? <Badge tone="outline">Trade</Badge> : null}
                     </div>
                     <div className="text-[10.5px] text-chalk-4">slot {t + 1}</div>
                   </td>
