@@ -55,6 +55,20 @@ describe('Roster Lab: lines on the season basis', () => {
     expect(rookie.stl).toBeGreaterThan(1.5)
   })
 
+  it('pools one or two games with a short last season instead of taking them as the season', () => {
+    // One game at 2 of 3 from the line; last season 12 games at 0.8 attempts and 78%.
+    const one = span(1, 23, { ftm: 2, fta: 3 })
+    const short = span(12, 24, { ftm: 0.625, fta: 0.8 })
+    const l = seasonLine(one, short, league)!
+    expect(l.fta).toBeCloseTo((3 + 12 * 0.8) / 13)
+    expect(l.ftm! / l.fta!).toBeGreaterThan(0.75) // not 67%
+    expect(l.ftm! / l.fta!).toBeLessThan(0.79)
+    // No last season at all: the one game's volume, shooting pulled toward the league's rate.
+    const alone = seasonLine(one, null, league)!
+    expect(alone.fta).toBeCloseTo(3)
+    expect(alone.ftm! / alone.fta!).toBeGreaterThan(0.74)
+  })
+
   it('values lines by summed z-scores, with fewer turnovers better', () => {
     const v = lineValues(new Map([['a', line({ pts: 20 })], ['b', line()], ['c', line({ tov: 4 })]]))
     expect(v.get('a')).toBeGreaterThan(v.get('b')!)

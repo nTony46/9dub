@@ -68,21 +68,31 @@ const FT_PRIOR_ATT = 40
 /** Last season counts as a prior with at least this many minutes. */
 const USABLE_PRIOR_MIN = 500
 
+const SPAN_KEYS = ['gp', 'min', 'pts', 'tpm', 'reb', 'ast', 'stl', 'blk', 'tov', 'fgm', 'fga', 'ftm', 'fta'] as const
+function perGame(s: Span): StatLine {
+  const g = (v: number) => v / s.gp
+  return { pts: g(s.pts), tpm: g(s.tpm), reb: g(s.reb), ast: g(s.ast), stl: g(s.stl), blk: g(s.blk), tov: g(s.tov), fgm: g(s.fgm), fga: g(s.fga), ftm: g(s.ftm), fta: g(s.fta) }
+}
+
 /**
  * This season's per-game line, current-season first: this season's minutes,
  * and per-minute points, rebounds, assists, turnovers and attempts mostly from
  * this season (`VOLUME_PRIOR_MIN` of last season's rates mixed in). Steals,
  * blocks, threes and shooting percentages are noisier over a few games, so
  * they lean more on last season, or on league rates for a player without one.
- * Under 3 games: last season's per-game line (20+ games), else this season's raw.
+ * Under 3 games: last season's per-game line (20+ games); otherwise both
+ * seasons' games pooled, with shooting pulled toward league rates, so one game
+ * (say 2 of 3 at the line) doesn't stand in for a season.
  */
 export function seasonLine(season: Span | null, prior: Span | null, league: LeagueRates): StatLine | null {
   const pr = prior && prior.min >= USABLE_PRIOR_MIN ? prior : null
   if (!season || season.gp < 3 || season.min <= 0) {
-    const s = prior && prior.gp >= 20 ? prior : season && season.gp > 0 ? season : null
-    if (!s) return null
-    const g = (v: number) => v / s.gp
-    return { pts: g(s.pts), tpm: g(s.tpm), reb: g(s.reb), ast: g(s.ast), stl: g(s.stl), blk: g(s.blk), tov: g(s.tov), fgm: g(s.fgm), fga: g(s.fga), ftm: g(s.ftm), fta: g(s.fta) }
+    if (prior && prior.gp >= 20) return perGame(prior)
+    const spans = [season, prior].filter((s): s is Span => !!s && s.gp > 0)
+    if (!spans.length) return null
+    const s = Object.fromEntries(SPAN_KEYS.map((k) => [k, spans.reduce((a, x) => a + x[k], 0)])) as Span
+    const g = perGame(s)
+    return { ...g, fgm: (s.fga / s.gp) * ((s.fgm + league.fg * 60) / (s.fga + 60)), ftm: (s.fta / s.gp) * ((s.ftm + league.ft * 30) / (s.fta + 30)) }
   }
   const mpg = season.min / season.gp
   const rate = (k: 'pts' | 'reb' | 'ast' | 'tov' | 'fga' | 'fta' | 'stl' | 'blk' | 'tpm', priorMin: number, lg?: number) => {
