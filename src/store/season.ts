@@ -1,4 +1,5 @@
-import type { Injury, LeagueSeed, MatchupWeek, RosterMove } from './schema'
+import { addDays } from '@/data/schedule'
+import type { EspnSync, Injury, LeagueSeed, MatchupWeek, RosterMove } from './schema'
 
 /**
  * In-season roster state. The draft pick list stays the record of the draft;
@@ -99,13 +100,86 @@ export function activeInjuries(injuries: readonly Injury[], today: string): Map<
   return new Map(injuries.filter((i) => i.until == null || i.until >= today).map((i) => [i.playerId, i.until]))
 }
 
-/** Which of a roster's injured players occupy IR slots (earliest marked first); the rest stay on the active roster. */
+/** The note on injuries the sync manages (players ESPN has in an IR slot); injuries you mark yourself are never touched. */
+export const ESPN_IR_NOTE = 'ESPN IR'
+/** A date you set for a player ESPN lists OUT who isn't marked out: it dates his absence without putting him on IR. */
+export const RETURN_DATE_NOTE = 'Return date'
+/** Stands in for ESPN's OUT on a player with no mark or date of yours (computed, never stored). */
+export const ESPN_OUT_NOTE = 'ESPN OUT'
+/** A player ESPN lists OUT, with no date of yours, is assumed to miss this many more days… */
+export const DEFAULT_OUT_DAYS = 14
+/** …or this many if he has missed most of his team's games so far, which points to a longer absence. */
+export const LONG_OUT_DAYS = 28
+
+const NOT_ON_IR = new Set([RETURN_DATE_NOTE, ESPN_OUT_NOTE])
+
+/** Whether ESPN's designation means he won't play. Day-to-day players are expected to. */
+export const isEspnOut = (status: string | null | undefined): boolean => status === 'OUT' || status === 'SUSPENSION'
+
+/** Everyone's ESPN designation from the last sync (null = healthy), free agents included. */
+export function espnStatuses(stats: EspnSync['stats'] | undefined, players: EspnSync['players'] | undefined): Map<string, string | null> {
+  const out = new Map<string, string | null>()
+  const healthy = (s: string | null | undefined) => (s && s !== 'ACTIVE' ? s : null)
+  for (const [id, s] of Object.entries(stats ?? {})) out.set(id, healthy(s.injuryStatus))
+  for (const [id, p] of Object.entries(players ?? {})) out.set(id, healthy(p.status))
+  return out
+}
+
+/**
+ * One rule for who sits, by ESPN's status rather than the roster slot he's in
+ * (ESPN gives no return dates):
+ * - a date you set, or a mark of your own, always wins;
+ * - OUT or suspended: out for `DEFAULT_OUT_DAYS` more days, `LONG_OUT_DAYS` if `missedMost`, re-counted from today at every look, bench or IR alike;
+ * - healthy but in an IR slot: he doesn't score there, so he's out through `weekEnd`, then expected back.
+ */
+export function effectiveInjuries(injuries: readonly Injury[], statuses: ReadonlyMap<string, string | null>, today: string, weekEnd: string, missedMost: (id: string) => boolean = () => false): Injury[] {
+  const assumedBack = (id: string) => addDays(today, missedMost(id) ? LONG_OUT_DAYS : DEFAULT_OUT_DAYS)
+  const live = activeInjuries(injuries, today)
+  const out: Injury[] = injuries.map((i) => {
+    if (i.note !== ESPN_IR_NOTE || i.until != null || !statuses.has(i.playerId)) return i
+    return { ...i, until: isEspnOut(statuses.get(i.playerId)) ? assumedBack(i.playerId) : weekEnd }
+  })
+  for (const [playerId, status] of statuses) if (isEspnOut(status) && !live.has(playerId)) out.push({ playerId, until: assumedBack(playerId), at: 0, note: ESPN_OUT_NOTE })
+  return out
+}
+
+/** Who sits right now, from the season's marks, the last ESPN sync and the NBA schedule: `effectiveInjuries` with what it needs worked out. */
+export function whoSits(
+  injuries: readonly Injury[],
+  espn: Pick<EspnSync, 'stats' | 'players'> | null | undefined,
+  games: readonly { date: string; home: string; away: string }[] | undefined,
+  weeks: readonly MatchupWeek[],
+  today: string,
+): Injury[] {
+  const played = new Map<string, number>()
+  for (const g of games ?? []) if (g.date < today) for (const t of [g.home, g.away]) played.set(t, (played.get(t) ?? 0) + 1)
+  const missedMost = (id: string) => {
+    const team = espn?.players?.[id]?.team ?? espn?.stats?.[id]?.team
+    const teamGames = team ? (played.get(team) ?? 0) : 0
+    return teamGames > 0 && (espn?.stats?.[id]?.season?.gp ?? 0) < teamGames / 2
+  }
+  return effectiveInjuries(injuries, espnStatuses(espn?.stats, espn?.players), today, currentWeek(weeks, today)?.end ?? today, missedMost)
+}
+
+/** Which of a roster's injured players occupy IR slots (earliest marked first); the rest stay on the active roster. A return date alone doesn't put anyone on IR. */
 export function irPlacement(roster: readonly string[], injuries: readonly Injury[], irSlots: number, today: string): { ir: string[]; outActive: string[]; active: string[] } {
   const live = activeInjuries(injuries, today)
-  const hurt = injuries.filter((i) => live.has(i.playerId) && roster.includes(i.playerId)).sort((a, b) => a.at - b.at)
+  const hurt = injuries.filter((i) => !NOT_ON_IR.has(i.note) && live.has(i.playerId) && roster.includes(i.playerId)).sort((a, b) => a.at - b.at)
   const ir = hurt.slice(0, irSlots).map((i) => i.playerId)
   const onIr = new Set(ir)
   return { ir, outActive: hurt.slice(irSlots).map((i) => i.playerId), active: roster.filter((id) => !onIr.has(id)) }
+}
+
+/**
+ * Who was on each team at the end of `date`, rebuilt from when each move and
+ * injury mark was recorded (a sync stamps what it finds, so it can trail the
+ * real move by the time since the last sync).
+ */
+export function rostersOn(draftRosters: readonly (readonly string[])[], moves: readonly RosterMove[], injuries: readonly Injury[], irSlots: number, date: string): { active: string[][]; out: Map<string, string | null> } {
+  const end = Date.parse(`${date}T23:59:59`)
+  const { rosters } = currentRosters(draftRosters, moves.filter((m) => m.at <= end))
+  const marks = injuries.filter((i) => i.at <= end && !NOT_ON_IR.has(i.note))
+  return { active: rosters.map((r) => irPlacement(r, marks, irSlots, date).active), out: activeInjuries(marks, date) }
 }
 
 const isDefaultName = (name: string | undefined, i: number) => !name?.trim() || name.trim() === `Team ${i + 1}`

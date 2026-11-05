@@ -5,10 +5,9 @@ import { addDays } from '@/data/schedule'
 import type { DatasetRecord } from '@/data/schema'
 import { teamForPick } from './draftLogic'
 import type { DraftPick, EspnSync, Injury, MatchupWeek, RosterMove } from './schema'
-import { activeInjuries, currentRosters } from './season'
+import { activeInjuries, currentRosters, ESPN_IR_NOTE, RETURN_DATE_NOTE } from './season'
 
-/** The note on injuries the sync manages (players ESPN has in an IR slot); injuries you mark yourself are never touched. */
-export const ESPN_IR_NOTE = 'ESPN IR'
+export { ESPN_IR_NOTE }
 export const ESPN_MOVE_NOTE = 'ESPN'
 
 export interface EspnPlayerInfo {
@@ -153,7 +152,8 @@ export function planEspnSync(snap: EspnSnapshot, input: EspnPlanInput): EspnPlan
     changes.push(queued.has(m.playerId) ? text + when : text)
   }
 
-  const hurt = activeInjuries(input.injuries, input.today)
+  // A return date alone isn't a mark: a player with one who goes on IR is still added (the date carries over).
+  const hurt = activeInjuries(input.injuries.filter((i) => i.note !== RETURN_DATE_NOTE), input.today)
   const irAdd = [...onIr].filter((id) => !hurt.has(id))
   const irClear = input.injuries.filter((i) => i.note === ESPN_IR_NOTE && !onIr.has(i.playerId)).map((i) => i.playerId)
   for (const id of irAdd) changes.push(`${label(target.get(id) ?? null)} put ${nameOf.get(id)} on IR`)

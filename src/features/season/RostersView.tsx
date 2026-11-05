@@ -12,7 +12,7 @@ import { relTime } from '@/lib/format'
 import { useApp } from '@/store/appStore'
 import { teamLabel, useEngine, useLineupSlots, type EngineData } from '@/store/derived'
 import { ESPN_MOVE_NOTE } from '@/store/espnSync'
-import { irPlacement, todayIso } from '@/store/season'
+import { irPlacement, isEspnOut, RETURN_DATE_NOTE, todayIso } from '@/store/season'
 import { PlayerPicker } from './PlayerPicker'
 import { baseLineup, espnSlotOn, useCurrentRosters } from './model'
 
@@ -148,6 +148,7 @@ function TeamRoster({
   const moveRosterPlayer = useApp((s) => s.moveRosterPlayer)
   const undoRosterMove = useApp((s) => s.undoRosterMove)
   const setInjury = useApp((s) => s.setInjury)
+  const setReturnDate = useApp((s) => s.setReturnDate)
   const renameTeam = useApp((s) => s.renameTeam)
   const openPreview = useApp((s) => s.openPreview)
   // Streamer tags: your own team only, and only a label.
@@ -247,20 +248,20 @@ function TeamRoster({
                         <span className="hidden sm:inline">{streamer ? 'Untag' : 'Streamer'}</span>
                       </Button>
                     ) : null}
-                    {ir || inj ? (
-                      <>
-                        <Input
-                          type="date"
-                          value={inj?.until ?? ''}
-                          onChange={(e) => setInjury(r.id!, e.target.value || null)}
-                          className="h-7 w-[128px] text-[12px]"
-                          aria-label={`${p.name} out until`}
-                          title="Out until (empty = until further notice)"
-                        />
-                        <Button size="xs" variant="ghost" onClick={() => setInjury(r.id!, false)} aria-label={`Activate ${p.name}`}>
-                          Activate
-                        </Button>
-                      </>
+                    {ir || inj || isEspnOut(espnStatus) ? (
+                      <Input
+                        type="date"
+                        value={inj?.until ?? ''}
+                        onChange={(e) => setReturnDate(r.id!, e.target.value || null)}
+                        className="h-7 w-[128px] text-[12px]"
+                        aria-label={`${p.name} out until`}
+                        title={isEspnOut(espnStatus) ? 'Out through this day (empty = assume two more weeks, four if he has missed most of his team’s games)' : 'Out until (empty = until further notice)'}
+                      />
+                    ) : null}
+                    {ir || (inj && inj.note !== RETURN_DATE_NOTE) ? (
+                      <Button size="xs" variant="ghost" onClick={() => setInjury(r.id!, false)} aria-label={`Activate ${p.name}`}>
+                        Activate
+                      </Button>
                     ) : (
                       <Button size="xs" variant="ghost" className="text-chalk-3" onClick={() => setInjury(r.id!, null)} aria-label={`Move ${p.name} to IR`} title="Mark out — goes to IR if a slot is free">
                         <Bandage size={12} /> IR

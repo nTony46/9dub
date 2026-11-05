@@ -340,6 +340,15 @@ export function countVariance(t: WeekTotals, cat: Exclude<Category, 'FG' | 'FT'>
   return Math.max(0, t.pts) * ratio
 }
 
+/**
+ * How much wider a category's real week-to-week misses run than the Poisson
+ * spread above, set from the first two finished weeks (24 team-weeks, compared
+ * with what the model projected): points and rebounds clearly wider, threes and
+ * turnovers probably, the rest about right. Rounded down from what was measured
+ * (PTS about 1.8, REB 1.7, 3PM 1.5, TO 1.3) because the sample is so small.
+ */
+const NOISE_SCALE: Partial<Record<Category, number>> = { PTS: 1.5, REB: 1.5, '3PM': 1.25, TO: 1.25 }
+
 const shareOf = (edge: number, noise: number) => (noise > 0 ? normalCdf(edge / noise) : edge > 1e-9 ? 1 : edge < -1e-9 ? 0 : 0.5)
 
 export function closenessOf(edge: number, noise: number): Closeness {
@@ -376,7 +385,7 @@ export function compareWeek(me: WeekTotals, them: WeekTotals, rest?: { me: WeekT
     const mine = me[k] as number
     const theirs = them[k] as number
     const edge = cat === 'TO' ? theirs - mine : mine - theirs
-    const noise = Math.sqrt(countVariance(rest?.me ?? me, cat) + countVariance(rest?.them ?? them, cat))
+    const noise = Math.sqrt(countVariance(rest?.me ?? me, cat) + countVariance(rest?.them ?? them, cat)) * (NOISE_SCALE[cat] ?? 1)
     const winner = Math.abs(edge) < 1e-9 ? 'tie' : edge > 0 ? 'me' : 'them'
     const flip = winner === 'me' ? null : `${cat === 'TO' ? '−' : '+'}${Math.max(0.1, Math.abs(edge)).toFixed(1)} ${cat}`
     return { cat, mine, theirs, edge, noise, winner, closeness: closenessOf(edge, noise), flip, share: shareOf(edge, noise) }

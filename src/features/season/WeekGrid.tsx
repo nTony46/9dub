@@ -10,7 +10,7 @@ import { cn } from '@/lib/cn'
 import { useApp } from '@/store/appStore'
 import type { EngineData } from '@/store/derived'
 import { irPlacement } from '@/store/season'
-import { dayLabel, lineSource, shortName, type ScheduleIndex } from './model'
+import { dayLabel, lineSource, shortName, useEffectiveInjuries, type ScheduleIndex } from './model'
 
 const CITY: Record<string, string> = Object.fromEntries(Object.entries(NBA_CITY_CODES).map(([city, code]) => [code, city]))
 const dow = (iso: string) => dayLabel(iso).dow
@@ -50,7 +50,7 @@ export function WeekGrid({
   const [who, setWho] = useState<'me' | 'them'>('me')
   const [legend, setLegend] = useState(false)
   const openPreview = useApp((s) => s.openPreview)
-  const injuries = useApp((s) => s.season.injuries)
+  const injuries = useEffectiveInjuries()
   const streamers = useApp((s) => s.season.streamers)
   const irSlots = useApp((s) => s.settings.irSlots)
   const rounds = useApp((s) => s.settings.rounds)

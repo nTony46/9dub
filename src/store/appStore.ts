@@ -8,7 +8,7 @@ import { db } from './db'
 import { addPick, deriveDraft, editPick, newSession, removePick, settingsChangeError, type DraftResult } from './draftLogic'
 import { applyIdRemap, planIdRemap, referencedIds, type RemapPlan } from './remap'
 import { ESPN_IR_NOTE, ESPN_MOVE_NOTE, planEspnDraft, planEspnSync } from './espnSync'
-import { currentRosters, matchupsFromSeed, syncedTeamNames, todayIso } from './season'
+import { currentRosters, matchupsFromSeed, RETURN_DATE_NOTE, syncedTeamNames, todayIso } from './season'
 import {
   LeagueSeedSchema,
   LeagueSettingsSchema,
@@ -123,6 +123,8 @@ export interface AppState extends PersistedState {
   undoRosterMove: (id: string) => void
   /** Mark a player out (no games count through `until`; null = until further notice), or healthy with `false`. */
   setInjury: (playerId: string, until: string | null | false) => void
+  /** When a hurt player is expected back (null = back to the default): dates his absence without marking him out or moving him to IR. */
+  setReturnDate: (playerId: string, until: string | null) => void
   /** Tag one of your players as a streamer, or untag him (a label only). */
   toggleStreamer: (playerId: string) => void
 
@@ -670,6 +672,13 @@ export const useApp = create<AppState>()((set, get) => {
         const prev = s.season.injuries.find((i) => i.playerId === playerId)
         return { season: { ...s.season, injuries: until === false ? rest : [...rest, { playerId, until, at: prev?.at ?? Date.now(), note: prev?.note ?? '' }] } }
       }),
+    setReturnDate: (playerId, until) =>
+      set((s) => {
+        const rest = s.season.injuries.filter((i) => i.playerId !== playerId)
+        const prev = s.season.injuries.find((i) => i.playerId === playerId)
+        if (!until && (!prev || prev.note === RETURN_DATE_NOTE)) return { season: { ...s.season, injuries: rest } }
+        return { season: { ...s.season, injuries: [...rest, { playerId, until, at: prev?.at ?? Date.now(), note: prev?.note ?? RETURN_DATE_NOTE }] } }
+      }),
     toggleStreamer: (playerId) =>
       set((s) => ({
         season: { ...s.season, streamers: s.season.streamers.includes(playerId) ? s.season.streamers.filter((id) => id !== playerId) : [...s.season.streamers, playerId] },
@@ -736,8 +745,11 @@ export const useApp = create<AppState>()((set, get) => {
             ...x.season,
             rosterMoves: [...x.season.rosterMoves, ...plan.moves.map((m) => ({ id: uid('mv'), at: now, playerId: m.playerId, from: m.from, to: m.to, note: ESPN_MOVE_NOTE }))],
             injuries: [
-              ...x.season.injuries.filter((i) => !touched.has(i.playerId)),
-              ...plan.irAdd.map((playerId) => ({ playerId, until: null, at: now, note: ESPN_IR_NOTE })),
+              // A date you set survives a player going on or coming off ESPN's IR.
+              ...x.season.injuries
+                .filter((i) => !touched.has(i.playerId) || (i.until != null && !plan.irAdd.includes(i.playerId)))
+                .map((i) => (touched.has(i.playerId) ? { ...i, note: RETURN_DATE_NOTE } : i)),
+              ...plan.irAdd.map((playerId) => ({ playerId, until: x.season.injuries.find((i) => i.playerId === playerId && i.note === RETURN_DATE_NOTE)?.until ?? null, at: now, note: ESPN_IR_NOTE })),
             ],
             matchups: plan.weeks ?? x.season.matchups,
             espn: {

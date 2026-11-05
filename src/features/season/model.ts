@@ -9,8 +9,8 @@ import { addDays, datesBetween, teamsByDate, type NbaSchedule } from '@/data/sch
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useApp } from '@/store/appStore'
 import { teamLabel, useDraft, type EngineData, type PlayerInfo } from '@/store/derived'
-import { activeInjuries, currentRosters, todayIso, type CurrentRosters } from '@/store/season'
-import type { EspnSync, LeagueSettings, MatchupWeek } from '@/store/schema'
+import { activeInjuries, currentRosters, todayIso, whoSits, type CurrentRosters } from '@/store/season'
+import type { EspnSync, Injury, LeagueSettings, MatchupWeek } from '@/store/schema'
 
 /**
  * Windows at least this wide dock the waiver wire in a column left of the
@@ -55,10 +55,20 @@ export function useScheduleIndex(): ScheduleIndex | null {
   }, [schedule])
 }
 
-/** Injuries in effect today (expired ones drop off automatically). */
-export function useInjuries(): Map<string, string | null> {
+/** Everyone who sits and until when, your marks and ESPN's statuses combined (see `effectiveInjuries`). */
+export function useEffectiveInjuries(): Injury[] {
   const injuries = useApp((s) => s.season.injuries)
-  return useMemo(() => activeInjuries(injuries, todayIso()), [injuries])
+  const espn = useApp((s) => s.season.espn)
+  const games = useApp((s) => s.nbaSchedule?.games)
+  const weeks = useApp((s) => s.season.matchups)
+  const today = todayIso()
+  return useMemo(() => whoSits(injuries, espn, games, weeks, today), [injuries, espn, games, weeks, today])
+}
+
+/** Who sits today → out through (null = until further notice); expired marks drop off automatically. */
+export function useInjuries(): Map<string, string | null> {
+  const list = useEffectiveInjuries()
+  return useMemo(() => activeInjuries(list, todayIso()), [list])
 }
 
 export interface ProjectionOptions {
@@ -173,9 +183,11 @@ export interface WeekProjection {
 export interface LiveTotals {
   me: WeekTotals | null
   them: WeekTotals | null
-  /** Games from this day on are projected, except `started` teams' games that day (already in the totals). */
+  /** Games from this day on are projected; `started` teams' games that day are in the totals as far as they've gone. */
   fromDate: string
   started: ReadonlySet<string>
+  /** The share still to come of `started` teams' games under way (absent = over). */
+  underway?: Readonly<Record<string, number>>
   asOf: string
 }
 
@@ -186,7 +198,7 @@ export function liveFor(live: EspnSync['live'] | undefined, weekNo: number, me: 
     const t = slot == null ? undefined : live.teams.find((x) => x.slot === slot + 1)
     return t ? weekTotals(t.totals) : null
   }
-  return { me: of(me), them: of(them), fromDate: live.fromDate, started: new Set(live.started), asOf: live.asOf }
+  return { me: of(me), them: of(them), fromDate: live.fromDate, started: new Set(live.started), underway: live.underway, asOf: live.asOf }
 }
 
 export interface FinalResult {
@@ -202,6 +214,52 @@ export function finalFor(results: EspnSync['results'] | undefined, weekNo: numbe
   if (!r) return undefined
   const [mine, theirs] = r.home.slot === me + 1 ? [r.home, r.away] : [r.away, r.home]
   return { opp: theirs.slot - 1, me: mine, them: theirs }
+}
+
+/** What a side still has to come in a live week. */
+export interface RestOfWeek {
+  totals: WeekTotals
+  /** Starts in games that haven't tipped off yet (the rest of a game under way isn't a start to come). */
+  starts: number
+  startsOf: (id: string) => number
+  days: SideProjection['days']
+}
+
+/**
+ * The rest of a live week. On the sync day the lineup is set by that day's whole
+ * slate: a player whose game has tipped still holds his seat, so nobody on the
+ * bench inherits it for a later game. Seated players yet to tip count in full,
+ * and those mid-game count for the share of it left. Later days are projected as usual.
+ * `added` is a pickup being tried: he can't play in a game already under way.
+ */
+export function restOfWeek(
+  players: readonly MatchupPlayer[],
+  dates: readonly string[],
+  live: Pick<LiveTotals, 'fromDate' | 'started' | 'underway'>,
+  byDate: ReadonlyMap<string, ReadonlySet<string>>,
+  slots: readonly SlotDef[],
+  added?: string,
+): RestOfWeek {
+  const playing = (d: string) => byDate.get(d)
+  const later = projectSide(players, dates.filter((d) => d > live.fromDate), playing, slots)
+  const tipped = (p: MatchupPlayer) => !!p.nbaTeam && live.started.has(p.nbaTeam)
+  const startsLater = (id: string) => later.players.get(id)?.starts ?? 0
+  if (!dates.includes(live.fromDate)) return { totals: later.totals, starts: later.starts, startsOf: startsLater, days: later.days }
+  const eligible = players.filter((p) => p.id !== added || !tipped(p))
+  const seated = new Set(projectSide(eligible, [live.fromDate], playing, slots).days[0].started)
+  const yetToTip = eligible.filter((p) => seated.has(p.id) && !tipped(p))
+  const midGame = eligible.flatMap((p) => {
+    const left = seated.has(p.id) && p.id !== added && p.nbaTeam ? (live.underway?.[p.nbaTeam] ?? 0) : 0
+    return left > 0 ? [{ ...p, availability: (p.availability ?? 1) * left }] : []
+  })
+  const tonight = projectSide(yetToTip, [live.fromDate], playing, slots)
+  const rest = projectSide(midGame, [live.fromDate], playing, slots)
+  return {
+    totals: addTotals(addTotals(tonight.totals, rest.totals), later.totals),
+    starts: tonight.starts + later.starts,
+    startsOf: (id) => (tonight.players.get(id)?.starts ?? 0) + startsLater(id),
+    days: [...tonight.days, ...later.days],
+  }
 }
 
 export function projectWeek(
@@ -224,14 +282,10 @@ export function projectWeek(
   const w = index.schedule.tbdWindow
   const tbdDays = w ? dates.filter((d) => d >= w.start && d <= w.end) : []
   if (!live || (!live.me && !live.them)) return { dates, me, them, call: compareWeek(me.totals, them.totals), tbdDays, live: null }
-  // Live: ESPN's totals so far + a projection of only what hasn't tipped off yet.
+  // Live: ESPN's totals so far + a projection of what's still to come.
   const rest = dates.filter((d) => d >= live.fromDate)
-  const restPlaying = (d: string) => {
-    const teams = index.byDate.get(d)
-    return d === live.fromDate && teams ? new Set([...teams].filter((t) => !live.started.has(t))) : teams
-  }
-  const meRestSide = projectSide(mineP, rest, restPlaying, slots)
-  const themRestSide = projectSide(theirsP, rest, restPlaying, slots)
+  const meRestSide = restOfWeek(mineP, rest, live, index.byDate, slots)
+  const themRestSide = restOfWeek(theirsP, rest, live, index.byDate, slots)
   const meRest = meRestSide.totals
   const themRest = themRestSide.totals
   const meNow = live.me ?? weekTotals(ZERO)
@@ -316,11 +370,17 @@ export function chasePlan(
     return live && d === live.fromDate && teams ? new Set([...teams].filter((t) => !live.started.has(t))) : teams
   }
   const slots = opts.slots ?? ESPN_DEFAULT_SLOTS
-  const restOf = (ids: readonly string[]) => projectSide(matchupPlayers(ids, engine, opts), rest, restPlaying, slots)
+  // The same rest of the week `projectWeek` adds to the live totals, so the two always agree.
+  const sideOf = (players: readonly MatchupPlayer[], added?: string): RestOfWeek => {
+    if (live) return restOfWeek(players, rest, live, index.byDate, slots, added)
+    const s = projectSide(players, rest, restPlaying, slots)
+    return { totals: s.totals, starts: s.starts, startsOf: (id) => s.players.get(id)?.starts ?? 0, days: s.days }
+  }
+  const restOf = (ids: readonly string[]) => sideOf(matchupPlayers(ids, engine, opts))
   const kept = mine.filter((id) => id !== drop)
   // The pickup at his tried line, out until the day he can play.
   const withPickup = (id: string) =>
-    projectSide(
+    sideOf(
       matchupPlayers([...kept, id], engine, opts).map((p) => {
         if (p.id !== id) return p
         const line = pick.lineFor?.(id)
@@ -329,9 +389,7 @@ export function chasePlan(
         const outThrough = waiting && p.outThrough !== null && (p.outThrough == null || waiting > p.outThrough) ? waiting : p.outThrough
         return { ...p, ...(line ? { line } : {}), outThrough }
       }),
-      rest,
-      restPlaying,
-      slots,
+      id,
     )
   const restMe = restOf(mine).totals
   const restThem = restOf(theirs).totals
@@ -344,7 +402,7 @@ export function chasePlan(
     })
     .map((id) => {
       const side = withPickup(id)
-      return { id, starts: side.players.get(id)?.starts ?? 0, days: side.days.filter((d) => d.started.includes(id)).map((d) => d.date), restMe: side.totals }
+      return { id, starts: side.startsOf(id), days: side.days.filter((d) => d.started.includes(id)).map((d) => d.date), restMe: side.totals }
     })
     .filter((o) => o.starts > 0)
   const { baseCall, results } = rankPickups({ me: week.me.totals, them: week.them.totals, restMe, restThem, live: !!live && !!(live.me || live.them) }, inputs)

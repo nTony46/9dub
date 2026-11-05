@@ -1,12 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateDemoDataset } from '@/data/demo/generate'
 import type { NbaSchedule } from '@/data/schedule'
+import { projectSide } from '@/analytics/matchup'
+import { slotDefs } from '@/analytics/positions'
+import { buildLab } from '@/features/season/lab'
 import { actualLine, chasePlan, projectWeek } from '@/features/season/model'
 import { NineDubDB, setDb } from '@/store/db'
 import { defaultPersisted, useApp } from '@/store/appStore'
 import { getEngine } from '@/store/derived'
 import { applyIdRemap, referencedIds } from '@/store/remap'
-import { activeInjuries, applyTrade, currentRosters, currentWeek, irPlacement, matchupsFromSeed, syncedTeamNames } from '@/store/season'
+import {
+  activeInjuries,
+  applyTrade,
+  currentRosters,
+  currentWeek,
+  DEFAULT_OUT_DAYS,
+  effectiveInjuries,
+  ESPN_IR_NOTE,
+  ESPN_OUT_NOTE,
+  espnStatuses,
+  irPlacement,
+  matchupsFromSeed,
+  RETURN_DATE_NOTE,
+  rostersOn,
+  syncedTeamNames,
+  whoSits,
+} from '@/store/season'
 import { migrateState, type LeagueSeed, type RosterMove } from '@/store/schema'
 
 const mv = (playerId: string, from: number | null, to: number | null, k = 0): RosterMove => ({ id: `m${k}-${playerId}`, at: k, playerId, from, to, note: '' })
@@ -304,5 +323,189 @@ describe('weekly lineup: a pickup with no projection', () => {
     expect(actualLine({ season: span(10, 100), recent: span(4, 80) })).toMatchObject({ span: 'last 15 days', mpg: 30, line: { pts: 20 } })
     expect(actualLine({ season: span(10, 100), recent: span(1, 30) })).toMatchObject({ span: 'this season', line: { pts: 10 } })
     expect(actualLine({ season: null, recent: null })).toBeNull()
+  })
+})
+
+describe('who sits: one rule by ESPN status', () => {
+  const today = '2026-11-04'
+  const weekEnd = '2026-11-08'
+  const back = '2026-11-18'
+  const status = (o: Record<string, string | null>) => new Map(Object.entries(o))
+  const until = (list: ReturnType<typeof effectiveInjuries>, id: string) => activeInjuries(list, today).get(id)
+  const ir = (playerId: string) => ({ playerId, until: null, at: 1, note: ESPN_IR_NOTE })
+
+  it('treats OUT the same on the bench and on IR: back after the default, counted from today', () => {
+    expect(DEFAULT_OUT_DAYS).toBe(14)
+    const list = effectiveInjuries([ir('onIr')], status({ onIr: 'OUT', onBench: 'OUT' }), today, weekEnd)
+    expect(until(list, 'onIr')).toBe(back)
+    expect(until(list, 'onBench')).toBe(back)
+    expect(list.find((i) => i.playerId === 'onBench')?.note).toBe(ESPN_OUT_NOTE)
+    // Later, ESPN still saying OUT keeps him two weeks away.
+    expect(activeInjuries(effectiveInjuries([], status({ onBench: 'OUT' }), '2026-11-20', '2026-11-22'), '2026-11-20').get('onBench')).toBe('2026-12-04')
+  })
+
+  it('a player who has missed most of his team’s games gets the longer default', () => {
+    const game = (date: string) => ({ date, home: 'BOS', away: 'DEN' })
+    const span = (gp: number) => ({ gp }) as never
+    const espn = {
+      players: { hurtLong: { team: 'BOS', positions: [], status: 'OUT' }, hurtNow: { team: 'BOS', positions: [], status: 'OUT' }, gone: { team: 'DEN', positions: [], status: 'OUT' } },
+      stats: { hurtLong: { team: 'BOS', season: span(1), injuryStatus: 'OUT' }, hurtNow: { team: 'BOS', season: span(3), injuryStatus: 'OUT' } },
+    } as never
+    const weeks = [{ id: 'w', start: '2026-11-02', end: weekEnd, opponent: null, label: '', owner: '', away: false }]
+    const list = whoSits([], espn, [game('2026-10-30'), game('2026-11-01'), game('2026-11-03'), game('2026-11-04')], weeks, today)
+    expect(until(list, 'hurtLong')).toBe('2026-12-02') // 1 of 3 so far: four weeks
+    expect(until(list, 'hurtNow')).toBe(back) // 3 of 3 until now: two weeks
+    expect(until(list, 'gone')).toBe('2026-12-02') // no games this season at all
+    // No schedule to go on: the usual default.
+    expect(until(whoSits([], espn, undefined, weeks, today), 'hurtLong')).toBe(back)
+  })
+
+  it('a healthy player in an IR slot sits through this week, then counts; day-to-day players play', () => {
+    const list = effectiveInjuries([ir('stashed')], status({ stashed: null, hurtALittle: 'DAY_TO_DAY' }), today, weekEnd)
+    expect(until(list, 'stashed')).toBe(weekEnd)
+    expect(until(list, 'hurtALittle')).toBeUndefined()
+  })
+
+  it('a date or a mark of yours wins over the default; a date gone by falls back to it', () => {
+    const list = effectiveInjuries(
+      [
+        { playerId: 'dated', until: '2026-12-01', at: 1, note: ESPN_IR_NOTE },
+        { playerId: 'benchDate', until: '2026-11-06', at: 1, note: RETURN_DATE_NOTE },
+        { playerId: 'mine', until: null, at: 1, note: '' },
+        { playerId: 'stale', until: '2026-11-01', at: 1, note: RETURN_DATE_NOTE },
+      ],
+      status({ dated: 'OUT', benchDate: 'OUT', mine: null, stale: 'OUT' }),
+      today,
+      weekEnd,
+    )
+    expect(until(list, 'dated')).toBe('2026-12-01')
+    expect(until(list, 'benchDate')).toBe('2026-11-06')
+    expect(until(list, 'mine')).toBeNull()
+    expect(until(list, 'stale')).toBe(back)
+  })
+
+  it('leaves marks alone when there is no ESPN data for him', () => {
+    expect(until(effectiveInjuries([ir('unknown')], status({}), today, weekEnd), 'unknown')).toBeNull()
+  })
+
+  it('reads statuses from stats and rosters, ACTIVE meaning healthy', () => {
+    const s = espnStatuses({ a: { injuryStatus: 'ACTIVE' }, b: { injuryStatus: 'OUT' } } as never, { c: { status: 'DAY_TO_DAY' } } as never)
+    expect([...s]).toEqual([
+      ['a', null],
+      ['b', 'OUT'],
+      ['c', 'DAY_TO_DAY'],
+    ])
+  })
+
+  it('a return date or ESPN’s OUT doesn’t move anyone onto IR', () => {
+    const list = effectiveInjuries([{ playerId: 'p2', until: '2026-11-06', at: 1, note: RETURN_DATE_NOTE }, ir('p3')], status({ p1: 'OUT', p2: 'OUT', p3: 'OUT' }), today, weekEnd)
+    expect(irPlacement(['p1', 'p2', 'p3', 'p4'], list, 2, today)).toEqual({ ir: ['p3'], outActive: [], active: ['p1', 'p2', 'p4'] })
+    // After his return he leaves IR on that day's view.
+    expect(irPlacement(['p3'], list, 2, '2026-11-19').ir).toEqual([])
+  })
+
+  it('rebuilds the rosters of a past week from when moves and marks were recorded', () => {
+    const at = (d: string) => Date.parse(`${d}T12:00:00`)
+    const draft = [['star', 'a'], ['b']]
+    const moves = [{ id: 'm', at: at('2026-10-28'), playerId: 'a', from: 0, to: 1, note: '' }]
+    const marks = [{ playerId: 'star', until: null, at: at('2026-10-29'), note: ESPN_IR_NOTE }]
+    expect(rostersOn(draft, moves, marks, 2, '2026-10-25')).toMatchObject({ active: [['star', 'a'], ['b']] })
+    expect(rostersOn(draft, moves, marks, 2, '2026-10-25').out.size).toBe(0)
+    const later = rostersOn(draft, moves, marks, 2, '2026-11-01')
+    expect(later.active).toEqual([[], ['b', 'a']])
+    expect(later.out.has('star')).toBe(true)
+  })
+})
+
+describe('return dates in the store', () => {
+  beforeEach(() => {
+    useApp.setState({ season: { ...defaultPersisted().season, injuries: [{ playerId: 'onIr', until: null, at: 5, note: ESPN_IR_NOTE }] } })
+  })
+  const rec = (id: string) => useApp.getState().season.injuries.find((i) => i.playerId === id)
+
+  it('dates a player with no mark without marking him out, and clearing the date removes it', () => {
+    useApp.getState().setReturnDate('bench', '2026-11-20')
+    expect(rec('bench')).toMatchObject({ until: '2026-11-20', note: RETURN_DATE_NOTE })
+    useApp.getState().setReturnDate('bench', null)
+    expect(rec('bench')).toBeUndefined()
+  })
+
+  it('keeps ESPN’s IR mark when you date it, and going back to the default keeps the mark', () => {
+    useApp.getState().setReturnDate('onIr', '2026-12-01')
+    expect(rec('onIr')).toMatchObject({ until: '2026-12-01', note: ESPN_IR_NOTE, at: 5 })
+    useApp.getState().setReturnDate('onIr', null)
+    expect(rec('onIr')).toMatchObject({ until: null, note: ESPN_IR_NOTE })
+  })
+})
+
+describe('the Roster Lab league', () => {
+  const demo = generateDemoDataset({ count: 120 })
+  beforeEach(async () => {
+    setDb(new NineDubDB(`lab-${Math.random()}`))
+    useApp.setState({ ...defaultPersisted(), hydrated: false, dataset: null, datasets: [], undoStack: [], previewId: null, compareIds: [], nbaSchedule: null })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({ json: async () => (String(url).endsWith('manifest.json') ? { datasets: [{ file: 'demo.json', default: true }] } : demo) })),
+    )
+    await useApp.getState().hydrate()
+  })
+
+  const week1 = { start: '2026-10-26', end: '2026-11-01' }
+  const week2 = { start: '2026-11-02', end: '2026-11-08' }
+  const week3 = { start: '2026-11-09', end: '2026-11-15' }
+  const today = '2026-11-03'
+  const dates = (w: { start: string; end: string }) => Array.from({ length: 7 }, (_, k) => new Date(Date.parse(`${w.start}T12:00:00Z`) + k * 864e5).toISOString().slice(0, 10))
+  const setup = () => {
+    const engine = getEngine(useApp.getState())!
+    const ps = engine.players.filter((p) => p.team && p.line && p.line.fga! > 5).slice(0, 4)
+    const [star, a, b, c] = ps
+    const teams = new Set(ps.map((p) => p.team!))
+    const byDate = new Map([...dates(week1), ...dates(week2), ...dates(week3)].map((d) => [d, teams]))
+    const rosters = [[star.id, a.id], [b.id, c.id]]
+    const inputs = {
+      engine,
+      rosters,
+      available: [],
+      injuries: new Map<string, string | null>(),
+      history: { draftRosters: rosters, moves: [], marks: [], irSlots: 2 },
+      weeks: [week2, week3],
+      stats: undefined,
+      results: undefined,
+      basis: 'season' as const,
+      scaleVolume: true,
+      rosterLimit: 13,
+      me: 0,
+      today,
+      playing: (d: string) => byDate.get(d),
+    }
+    return { engine, star, a, b, c, rosters, byDate, inputs }
+  }
+
+  it('a hurt star counts from the day after his absence ends, and a player out for good does not', () => {
+    const { star, inputs } = setup()
+    const slots = slotDefs(useApp.getState().settings.lineupSlots)
+    const healthy = buildLab({ ...inputs, slots })
+    const gone = buildLab({ ...inputs, slots, injuries: new Map([[star.id, null]]) })
+    const backNextWeek = buildLab({ ...inputs, slots, injuries: new Map([[star.id, week2.end]]) })
+    expect(gone.base[0][1].pts).toBeLessThan(healthy.base[0][1].pts)
+    expect(backNextWeek.base[0][0].pts).toBeCloseTo(gone.base[0][0].pts)
+    expect(backNextWeek.base[0][1].pts).toBeCloseTo(healthy.base[0][1].pts)
+  })
+
+  it('measures the volume factor on the roster of the finished week, not today’s', () => {
+    const { engine, star, a, rosters, byDate, inputs } = setup()
+    const slots = slotDefs(useApp.getState().settings.lineupSlots)
+    const playing = (d: string) => byDate.get(d)
+    const fgaOf = (ids: string[]) => projectSide(ids.map((id) => ({ id, nbaTeam: engine.byId.get(id)!.team, positions: engine.byId.get(id)!.positions, line: engine.byId.get(id)!.line!, priority: 1 })), dates(week1), playing, slots).totals.fga
+    const actual = fgaOf(rosters[0])
+    const side = (slot: number, fga: number) => ({ slot, wins: 0, losses: 0, ties: 0, cats: {}, totals: { pts: 0, tpm: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fgm: 0, fga, ftm: 0, fta: 0 } })
+    const results = [{ period: 1, home: side(1, actual), away: side(2, fgaOf(rosters[1])) }]
+    // The star played the finished week and went on IR after it: the team took just what that roster projects.
+    const marks = [{ playerId: star.id, until: null, at: Date.parse(`${week2.start}T12:00:00`), note: ESPN_IR_NOTE }]
+    const lab = buildLab({ ...inputs, slots, weeks: [week1, week2, week3], results, history: { ...inputs.history, marks }, injuries: new Map([[star.id, null]]) })
+    expect(lab.finished).toBe(1)
+    expect(lab.volume[0]).toBeCloseTo(1)
+    // Against today's roster alone (just him), the same attempts would read as a team far outplaying its roster.
+    expect(actual / fgaOf([a.id])).toBeGreaterThan(1.25)
   })
 })

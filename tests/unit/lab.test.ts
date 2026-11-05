@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MatchupPlayer, WeekTotals } from '@/analytics/matchup'
-import { ESPN_DEFAULT_SLOTS } from '@/analytics/positions'
+import { ESPN_DEFAULT_SLOTS, type SlotDef } from '@/analytics/positions'
 import type { StatLine } from '@/analytics/types'
 import type { EspnTotals } from '@/data/espn'
 import {
@@ -17,8 +17,10 @@ import {
   tierOf,
   volumeFactor,
   volumeFactors,
+  withRosterLimit,
   type LeagueRates,
 } from '@/features/season/lab'
+import { restOfWeek } from '@/features/season/model'
 import { ordinal } from '@/lib/format'
 import type { EspnSync } from '@/store/schema'
 
@@ -101,20 +103,114 @@ describe('Roster Lab: weeks and volume', () => {
     expect(fin[0].dates).toHaveLength(7)
   })
 
-  it('scales a team by how much it actually plays, within ±25%', () => {
-    expect(volumeFactor(330, 300)).toBeCloseTo(1.1)
-    expect(volumeFactor(600, 300)).toBe(1.25)
-    expect(volumeFactor(100, 300)).toBe(0.8)
-    expect(volumeFactor(0, 300)).toBe(1)
+  it('scales a team by how much it actually plays, more as finished weeks pile up', () => {
+    // Half strength after two finished weeks, 8/10 after eight; the ratio itself stays within ±25%.
+    expect(volumeFactor(330, 300, 2)).toBeCloseTo(1.05)
+    expect(volumeFactor(330, 300, 8)).toBeCloseTo(1.08)
+    expect(volumeFactor(600, 300, 2)).toBeCloseTo(1.125)
+    expect(volumeFactor(100, 300, 2)).toBeCloseTo(0.9)
+    expect(volumeFactor(0, 300, 2)).toBe(1)
+    expect(volumeFactor(330, 300, 0)).toBe(1)
     const players: MatchupPlayer[] = [{ id: 'a', nbaTeam: 'BOS', positions: ['PG'], line: line({ fga: 10 }), priority: 1 }]
     const dates = ['2026-10-20', '2026-10-21']
     const playing = () => new Set(['BOS'])
-    // Projected 20 attempts over the two days; the team actually took 22.
-    const [f] = volumeFactors([players], [{ dates, fga: new Map([[0, 22]]) }], playing, ESPN_DEFAULT_SLOTS)
-    expect(f).toBeCloseTo(1.1)
+    // Projected 20 attempts over the two days; the team actually took 22 in its one finished week.
+    const [f] = volumeFactors(1, () => [players], [{ dates, fga: new Map([[0, 22]]) }], playing, ESPN_DEFAULT_SLOTS)
+    expect(f).toBeCloseTo(1 + 0.1 / 3)
     const [w] = teamWeeks(players, [dates], playing, ESPN_DEFAULT_SLOTS, f)
-    expect(w.fga).toBeCloseTo(22)
+    expect(w.fga).toBeCloseTo(20 * f)
     expect(w.fgPct).toBeCloseTo(0.4) // percentages unchanged
+  })
+
+  it('measures each finished week against the players the team had that week', () => {
+    const star: MatchupPlayer = { id: 'star', nbaTeam: 'BOS', positions: ['PG'], line: line({ fga: 20 }), priority: 1 }
+    const sub: MatchupPlayer = { id: 'sub', nbaTeam: 'BOS', positions: ['PG'], line: line({ fga: 10 }), priority: 2 }
+    const playing = () => new Set(['BOS'])
+    const w1 = { dates: ['2026-10-20'], fga: new Map([[0, 20]]) }
+    const w2 = { dates: ['2026-10-27'], fga: new Map([[0, 10]]) }
+    // The star played week 1 and has since gone down: actual matches the roster of each week, so no scaling.
+    const then = (w: { dates: string[] }) => [w.dates[0] === '2026-10-20' ? [star] : [sub]]
+    expect(volumeFactors(1, then, [w1, w2], playing, ESPN_DEFAULT_SLOTS)[0]).toBeCloseTo(1)
+    // Measured against today's roster alone, those 30 attempts would read as a team outplaying a 20-attempt projection.
+    expect(volumeFactors(1, () => [[sub]], [w1, w2], playing, ESPN_DEFAULT_SLOTS)[0]).toBeGreaterThan(1.1)
+  })
+})
+
+describe('Roster Lab: the roster limit as players come back', () => {
+  const p = (id: string, priority: number, outThrough?: string | null): MatchupPlayer => ({ id, nbaTeam: 'BOS', positions: ['PG'], line: line(), priority, outThrough })
+  // Thirteen healthy players (priority = lower is better, so h13 is the lowest value).
+  const healthy = Array.from({ length: 11 }, (_, k) => p(`h${k + 1}`, k + 1))
+  const until = (r: ReturnType<typeof withRosterLimit>, id: string) => r.players.find((x) => x.id === id)!.until
+
+  it('drops the lowest-value healthy player the day a return would put the team over', () => {
+    const r = withRosterLimit([...healthy, p('h12', 12), p('h13', 13), p('star', 0, '2026-11-18'), p('big', 0.5, '2026-12-01')], 13, 2, '2026-11-01')
+    expect([...r.cuts]).toEqual([
+      ['h13', '2026-11-18'],
+      ['h12', '2026-12-01'],
+    ])
+    expect(until(r, 'h13')).toBe('2026-11-18')
+    expect(until(r, 'h1')).toBeUndefined()
+  })
+
+  it('keeps everyone while out players fit in the IR slots and the rest fit the limit', () => {
+    const r = withRosterLimit([...healthy, p('star', 0, '2026-11-18')], 13, 2, '2026-11-01')
+    expect(r.cuts.size).toBe(0)
+  })
+
+  it('counts a third out player against the roster, and someone out for good never comes back to force a cut', () => {
+    // 11 healthy + 3 out with 2 IR slots: 12 on the roster until they return, then 14: one cut, when the last of them is back.
+    const r = withRosterLimit([...healthy, p('a', 0, '2026-11-10'), p('b', 0, '2026-11-12'), p('c', 0, '2026-11-20')], 13, 2, '2026-11-01')
+    expect([...r.cuts]).toEqual([['h11', '2026-11-20']])
+    const never = withRosterLimit([...healthy, p('a', 0, null), p('b', 0, null), p('c', 0, '2026-11-20')], 13, 2, '2026-11-01')
+    expect(never.cuts.size).toBe(0)
+  })
+
+  it('trims a team already over the limit (a three-for-two trade) from the first day projected', () => {
+    const r = withRosterLimit([...healthy, p('h12', 12), p('h13', 13), p('h14', 14)], 13, 2, '2026-11-01')
+    expect([...r.cuts]).toEqual([['h14', '2026-11-01']])
+  })
+})
+
+describe('a live week: what is still to come on the sync day', () => {
+  const seats = [{ label: 'UTIL', accepts: [], starter: true }, { label: 'UTIL', accepts: [], starter: true }] as unknown as SlotDef[]
+  const p = (id: string, nbaTeam: string, pts: number, priority: number): MatchupPlayer => ({ id, nbaTeam, positions: ['PG'], line: line({ pts }), priority })
+  const tippedStar = p('tipped', 'BOS', 30, 1)
+  const later = p('later', 'LAL', 20, 2)
+  const bench = p('bench', 'DEN', 10, 3)
+  const day = '2026-11-04'
+  const next = '2026-11-05'
+  const byDate = new Map([
+    [day, new Set(['BOS', 'LAL', 'DEN'])],
+    [next, new Set(['DEN'])],
+  ])
+  const live = { fromDate: day, started: new Set(['BOS']), underway: { BOS: 0.5 } }
+
+  it('a tipped player keeps his seat: nobody on the bench inherits it, and the rest of his game counts', () => {
+    const r = restOfWeek([tippedStar, later, bench], [day], live, byDate, seats)
+    expect(r.totals.pts).toBeCloseTo(20 + 0.5 * 30) // later in full, half of the game under way; the bench player sits
+    expect(r.starts).toBe(1) // only a game yet to tip is a start to come
+    expect(r.startsOf('bench')).toBe(0)
+  })
+
+  it('a finished game adds nothing, and syncs from before `underway` existed read the same way', () => {
+    expect(restOfWeek([tippedStar, later, bench], [day], { fromDate: day, started: new Set(['BOS']) }, byDate, seats).totals.pts).toBeCloseTo(20)
+    expect(restOfWeek([tippedStar, later, bench], [day], { fromDate: day, started: new Set(['BOS']), underway: {} }, byDate, seats).totals.pts).toBeCloseTo(20)
+  })
+
+  it('later days are projected as usual', () => {
+    const r = restOfWeek([tippedStar, later, bench], [day, next], live, byDate, seats)
+    expect(r.totals.pts).toBeCloseTo(20 + 15 + 10) // the bench player starts tomorrow, when his is the only game
+    expect(r.startsOf('bench')).toBe(1)
+  })
+
+  it('a pickup can’t play in a game under way, and takes a seat tonight only if one is open', () => {
+    const pickup = p('pickup', 'BOS', 40, 0)
+    const r = restOfWeek([later, pickup], [day], live, byDate, seats, 'pickup')
+    expect(r.totals.pts).toBeCloseTo(20)
+    expect(r.startsOf('pickup')).toBe(0)
+    const lateTip = p('pickup', 'DEN', 40, 0)
+    expect(restOfWeek([tippedStar, lateTip], [day], live, byDate, seats, 'pickup').startsOf('pickup')).toBe(1)
+    expect(restOfWeek([tippedStar, later, { ...lateTip, priority: 9 }], [day], live, byDate, seats, 'pickup').startsOf('pickup')).toBe(0)
   })
 })
 

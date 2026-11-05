@@ -95,6 +95,8 @@ export const EspnLiveSchema = z.object({
   fromDate: z.string(),
   /** …except these NBA teams' games that day, already under way or over when the totals were read. */
   started: z.array(z.string()),
+  /** Of those, the teams still playing: the rough share of the game left when the totals were read. Absent from syncs before it existed. */
+  underway: z.record(z.string(), z.number()).optional(),
   /** Totals so far by draft slot (1-based). */
   teams: z.array(z.object({ slot: z.number().int(), totals: EspnTotalsSchema })),
 })
@@ -303,6 +305,8 @@ export function localDate(ms: number): string {
 
 /** A game that tipped off within this window before `asOf` belongs to the current day. */
 const GAME_WINDOW_MS = 12 * 60 * 60 * 1000
+/** A game's rough length on the clock, tip-off to final: the share of a game under way still to come is estimated from it. */
+const GAME_CLOCK_MS = 150 * 60 * 1000
 
 /** ESPN pro-team id → 9dub NBA code, from the season's proTeams list. */
 export function proTeamCodes(raw: unknown): Map<number, string> {
@@ -432,20 +436,21 @@ export function snapshotFromEspn(rawLeague: unknown, rawProTeams: unknown, fetch
   const period = league.status?.currentMatchupPeriod
   const asOf = Date.parse(fetchedAt)
   const current = (league.schedule ?? []).filter((m) => m.matchupPeriodId === period)
+  const startedGames = ((rawProTeams as RawProTeams)?.games ?? []).filter((g) => g.start <= asOf && g.start > asOf - GAME_WINDOW_MS)
+  const underway: Record<string, number> = {}
+  for (const g of startedGames) {
+    const left = 1 - (asOf - g.start) / GAME_CLOCK_MS
+    if (left <= 0) continue
+    for (const c of [codes.get(g.home), codes.get(g.away)]) if (c) underway[c] = left
+  }
   const live =
     period != null && current.length
       ? {
           period,
           asOf: fetchedAt,
           fromDate: localDate(asOf),
-          started: [
-            ...new Set(
-              ((rawProTeams as RawProTeams)?.games ?? [])
-                .filter((g) => g.start <= asOf && g.start > asOf - GAME_WINDOW_MS)
-                .flatMap((g) => [codes.get(g.home), codes.get(g.away)])
-                .filter((c): c is string => !!c),
-            ),
-          ],
+          started: [...new Set(startedGames.flatMap((g) => [codes.get(g.home), codes.get(g.away)]).filter((c): c is string => !!c))],
+          underway,
           teams: current
             .flatMap((m) => [m.home, m.away])
             .filter((side): side is RawSide => side?.teamId != null && slots.has(side.teamId))

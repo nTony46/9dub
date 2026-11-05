@@ -17,12 +17,12 @@ import { ordinal } from '@/lib/format'
 import { useApp } from '@/store/appStore'
 import { localDate } from '@/data/espn'
 import { teamLabel, type EngineData, type PlayerInfo } from '@/store/derived'
-import { applyTrade, irPlacement, todayIso, type TradeDraft } from '@/store/season'
+import { applyTrade, ESPN_OUT_NOTE, irPlacement, todayIso, type TradeDraft } from '@/store/season'
 import type { EspnSync, MatchupWeek } from '@/store/schema'
 import { categoryZ, seasonRanks, type SeasonRanks } from './lab'
 import { PlayerPicker } from './PlayerPicker'
 import { WeekGrid } from './WeekGrid'
-import { actualLine, chasePlan, dayLabel, lineSource, useWirePlacement, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
+import { actualLine, chasePlan, dayLabel, lineSource, useEffectiveInjuries, useWirePlacement, liveFor, opponentName, projectWeek, rangeText, type ChasePlan, type FinalResult, type ProjectionOptions, type ScheduleIndex, type WeekProjection } from './model'
 
 const pct3 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(3).replace(/^0/, ''))
 const n1 = (x: number | null | undefined) => (x == null ? '—' : x.toFixed(1))
@@ -1161,7 +1161,7 @@ function LineupCard({
   engine: EngineData
   index: ScheduleIndex
 }) {
-  const injuries = useApp((s) => s.season.injuries)
+  const injuries = useEffectiveInjuries()
   const irSlots = useApp((s) => s.settings.irSlots)
   const rounds = useApp((s) => s.settings.rounds)
   const setInjury = useApp((s) => s.setInjury)
@@ -1177,7 +1177,7 @@ function LineupCard({
         ? { id, note: 'game · lineup full', tone: 'text-warn' }
         : { id, note: 'no game', tone: 'text-chalk-4' },
     ),
-    ...day.out.filter((id) => !onIr.has(id)).map((id) => ({ id, note: 'out · IR full', tone: 'text-bad' })),
+    ...day.out.filter((id) => !onIr.has(id)).map((id) => ({ id, note: ir.length >= irSlots ? 'out · IR full' : 'out', tone: 'text-bad' })),
   ]
   const benchSlots = Math.max(0, rounds - day.lineup.length)
   const overBench = benchRows.length - benchSlots
@@ -1185,6 +1185,8 @@ function LineupCard({
   const row = (key: string, { slot, id, note, tone, slotTone, dim }: { slot: string; id: string | null; note?: string; tone?: string; slotTone?: string; dim?: boolean }) => {
     const p = id ? engine.byId.get(id) : null
     const out = id ? day.out.includes(id) : false
+    // ESPN's OUT with no mark of yours: there's no mark to clear, only a return date to set.
+    const espnOut = !!id && injuries.find((i) => i.playerId === id)?.note === ESPN_OUT_NOTE
     return (
       <li key={key} className={cn('group flex h-9 items-center gap-2.5 border-t border-seam text-[13.5px] first:border-t-0', dim && 'text-chalk-3')}>
         <span className={cn('w-11 shrink-0 font-display text-[13px] font-semibold tracking-wide', slotTone ?? 'text-chalk-3')}>{slot}</span>
@@ -1197,15 +1199,21 @@ function LineupCard({
             <SourceTag p={p} />
             {mine && streamers.includes(id) ? <StreamerBadge /> : null}
             <span className={cn('ml-auto shrink-0 font-mono text-[12.5px] tnum', tone ?? 'text-chalk-2')}>{note ?? (p.team ? (games?.get(p.team) ?? 'no game') : 'FA')}</span>
-            <button
-              type="button"
-              onClick={() => setInjury(id, out ? false : null)}
-              className={cn('shrink-0 rounded p-1 hover:bg-stand', out ? 'text-bad' : 'text-chalk-4 opacity-0 focus:opacity-100 group-hover:opacity-100')}
-              aria-label={out ? `Mark ${p.name} healthy` : `Mark ${p.name} out`}
-              title={out ? 'Mark healthy' : 'Mark out (moves to IR if a slot is free)'}
-            >
-              <Bandage size={13} />
-            </button>
+            {espnOut ? (
+              <span className="shrink-0 p-1 text-bad" title="ESPN lists him out. Set when he's back under Rosters or in the Roster Lab.">
+                <Bandage size={13} />
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setInjury(id, out ? false : null)}
+                className={cn('shrink-0 rounded p-1 hover:bg-stand', out ? 'text-bad' : 'text-chalk-4 opacity-0 focus:opacity-100 group-hover:opacity-100')}
+                aria-label={out ? `Mark ${p.name} healthy` : `Mark ${p.name} out`}
+                title={out ? 'Mark healthy' : 'Mark out (moves to IR if a slot is free)'}
+              >
+                <Bandage size={13} />
+              </button>
+            )}
           </>
         ) : (
           <span className="text-[13px] text-chalk-4" title={slot === 'IR' || slot === 'BE' ? undefined : 'Nobody with a game today fits this slot'}>

@@ -13,29 +13,22 @@ import { leagueHeat, signClass } from '@/lib/diverging'
 import { ordinal } from '@/lib/format'
 import { normalizeName } from '@/data/normalize'
 import { useApp } from '@/store/appStore'
-import { teamLabel, useEngine, useLineupSlots, type EngineData } from '@/store/derived'
-import { irPlacement, todayIso } from '@/store/season'
+import { teamLabel, useDraft, useEngine, useLineupSlots, type EngineData } from '@/store/derived'
+import { espnStatuses, ESPN_OUT_NOTE, irPlacement, isEspnOut, todayIso } from '@/store/season'
 import {
   applyLab,
+  buildLab,
   categoryZ,
-  finishedWeeks,
-  labLineFor,
-  labPlayers,
-  labWeeks,
   leagueMetrics,
-  lineValues,
   overallRank,
-  strongest,
-  teamWeeks,
   tierOf,
-  volumeFactors,
   zScores,
   type LabBasis,
   type LabChange,
   type LabMetrics,
   type LabTrade,
 } from './lab'
-import { useCurrentRosters, useInjuries, useScheduleIndex, type ProjectionOptions } from './model'
+import { dayLabel, useCurrentRosters, useEffectiveInjuries, useInjuries, useScheduleIndex } from './model'
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`
 const TIER = { win: { label: 'Win', text: 'text-good' }, swing: { label: 'Swing', text: 'text-warn' }, punt: { label: 'Punt', text: 'text-bad' } } as const
@@ -64,6 +57,8 @@ export function RosterLab() {
   const slots = useLineupSlots()
   const injuries = useInjuries()
   const { rosters } = useCurrentRosters()
+  const { rosters: draftRosters } = useDraft()
+  const moves = useApp((s) => s.season.rosterMoves)
   const me = settings.userSlot != null && settings.userSlot <= settings.teams ? settings.userSlot - 1 : null
   const today = todayIso()
   const [basisPick, setBasis] = useState<LabBasis>('season')
@@ -71,6 +66,7 @@ export function RosterLab() {
   // One builder per trade; null until a partner is picked.
   const [trades, setTrades] = useState<(LabTrade | null)[]>([null])
 
+  // Out of the lineup today, only to count roster spots: everyone stays on his team, and comes back when his absence ends.
   const active = useMemo(() => rosters.map((r) => irPlacement(r, injuriesList, settings.irSlots, today).active), [rosters, injuriesList, settings.irSlots, today])
   // The season basis needs this season's stats for (nearly) every rostered player; syncs before the Roster Lab kept only some.
   const hasStats = useMemo(() => {
@@ -79,45 +75,46 @@ export function RosterLab() {
   }, [active, espn?.stats])
   const basis: LabBasis = hasStats ? basisPick : 'projection'
   const available = useMemo(() => Object.entries(espn?.stats ?? {}).filter(([id, s]) => s.available && engine?.byId.has(id)).map(([id]) => id), [espn?.stats, engine])
-  const opts = useMemo<ProjectionOptions>(() => ({ availability: false, injuries, slots, lineups: espn?.lineups ?? null }), [injuries, slots, espn?.lineups])
+  const statuses = useMemo(() => espnStatuses(espn?.stats, espn?.players), [espn?.stats, espn?.players])
   const lab = useMemo(() => {
     if (!engine || !index || me == null) return null
-    const playing = (d: string) => index.byDate.get(d)
-    const lineFor = labLineFor(espn?.stats, basis)
-    const seasonLines = labLineFor(espn?.stats, 'season')
-    const pool = new Set([...active.flat(), ...available])
-    const lineOf = (f: (id: string) => StatLine | null) => new Map([...pool].map((id) => [id, f(id) ?? engine.byId.get(id)?.line ?? null] as const).filter((x): x is [string, StatLine] => x[1] != null))
-    const values = lineValues(lineOf(lineFor))
-    const seasonValues = lineValues(lineOf(seasonLines))
-    const value = (id: string) => values.get(id) ?? -99
-    const all = labWeeks(weeks, today)
-    // How much each team actually plays (streaming, full lineups), measured with this season's lines so either basis gets the same factor.
-    const fin = finishedWeeks(weeks, espn?.results, today)
-    const volume = hasStats ? volumeFactors(active.map((r) => labPlayers(r, engine, opts, seasonLines, (id) => seasonValues.get(id) ?? -99)), fin, playing, slots) : active.map(() => 1)
-    const project = (ids: readonly string[], t: number) => teamWeeks(labPlayers(ids, engine, opts, lineFor, value), all, playing, slots, volume[t])
-    const base = active.map((r, t) => project(r, t))
-    const metrics = leagueMetrics(base, me)
-    return { lineFor, value, base, metrics, top4: strongest(metrics.strength, me, 4), project, weeks: all.length, finished: fin.length, volume }
-  }, [engine, index, me, espn?.stats, espn?.results, basis, active, available, weeks, today, opts, slots, hasStats])
+    return buildLab({
+      engine,
+      rosters,
+      available,
+      injuries,
+      history: { draftRosters, moves, marks: injuriesList, irSlots: settings.irSlots },
+      weeks,
+      stats: espn?.stats,
+      results: espn?.results,
+      basis,
+      scaleVolume: hasStats,
+      rosterLimit: settings.rounds,
+      me,
+      today,
+      playing: (d) => index.byDate.get(d),
+      slots,
+    })
+  }, [engine, index, me, espn?.stats, espn?.results, basis, rosters, draftRosters, moves, injuriesList, settings.irSlots, settings.rounds, available, injuries, weeks, today, slots, hasStats])
 
   const scenario = useMemo(() => {
     if (!lab || me == null) return null
     const valid = changes.filter((c) => c.add)
     const ts = trades.filter((t): t is LabTrade => !!t && (t.give.length > 0 || t.get.length > 0))
     if (!valid.length && !ts.length) return null
-    const ros = applyLab(active, me, valid, ts)
+    const ros = applyLab(rosters, me, valid, ts)
     const partners = [...new Set(ts.map((t) => t.team))]
     const weeksNow = lab.base.map((w, k) => (k === me || partners.includes(k) ? lab.project(ros[k], k) : w))
     return { metrics: leagueMetrics(weeksNow, me, lab.top4), partners, rosters: ros }
-  }, [lab, me, changes, trades, active])
+  }, [lab, me, changes, trades, rosters])
 
   if (!engine) return <Empty title="No player data loaded" />
   if (me == null) return <Empty title="Pick your team first">Set your draft slot in Settings → League to try roster changes.</Empty>
   if (!index || !weeks.length || !lab) return <Empty title="No schedule yet">The Roster Lab needs the NBA schedule and your league’s matchup weeks (sync ESPN, or add them under Matchups).</Empty>
   if (!lab.weeks) return <Empty title="The regular season is over">There are no regular-season weeks left to project.</Empty>
-  if (!active[me]?.length) return <Empty title="Your roster is empty">Sync ESPN, or add your players under Rosters, to try changes.</Empty>
+  if (!rosters[me]?.length) return <Empty title="Your roster is empty">Sync ESPN, or add your players under Rosters, to try changes.</Empty>
 
-  const mine = active[me]
+  const mine = rosters[me]
   const name = (id: string) => engine.byId.get(id)?.name ?? id
   const pickups = changes.flatMap((c) => [c.drop, c.add]).filter((x): x is string => !!x)
   const traded = (skip: number) => trades.flatMap((t, k) => (t && k !== skip ? [...t.give, ...t.get] : []))
@@ -130,6 +127,8 @@ export function RosterLab() {
   }
   const after = scenario?.metrics ?? null
   const base = lab.metrics
+  const isOut = (id: string) => isEspnOut(statuses.get(id))
+  const onIr = new Set(rosters.flat().filter((id) => !active.some((r) => r.includes(id))))
 
   return (
     <div className="space-y-4">
@@ -180,12 +179,13 @@ export function RosterLab() {
                     <div className="flex h-8 items-center gap-2 rounded-md border border-seam bg-well px-2 text-[12.5px]">
                       <span className="truncate font-medium text-chalk">{name(c.add)}</span>
                       <WaiverTag stats={espn?.stats?.[c.add]} />
+                      {isOut(c.add) ? <OutTag until={injuries.get(c.add) ?? null} /> : null}
                       <IconButton label="Clear pickup" className="ml-auto" onClick={() => setChange(i, { add: null })}>
                         <X size={13} />
                       </IconButton>
                     </div>
                   ) : (
-                    <FreeAgentPicker engine={engine} pool={available.filter((id) => !used.has(id))} value={lab.value} lineFor={lab.lineFor} stats={espn?.stats} onPick={(id) => setChange(i, { add: id })} />
+                    <FreeAgentPicker engine={engine} pool={available.filter((id) => !used.has(id))} value={lab.value} lineFor={lab.lineFor} stats={espn?.stats} isOut={isOut} outUntil={(id) => injuries.get(id) ?? null} onPick={(id) => setChange(i, { add: id })} />
                   )}
                 </div>
                 <IconButton label="Remove this change" onClick={() => setChanges((cs) => (cs.length === 1 ? [{ drop: null, add: null }] : cs.filter((_, k) => k !== i)))}>
@@ -206,7 +206,8 @@ export function RosterLab() {
                 <TradeBuilder
                   engine={engine}
                   me={me}
-                  rosters={active}
+                  rosters={rosters}
+                  isOut={isOut}
                   trade={t}
                   setTrade={(x) => setTradeAt(i, x)}
                   used={new Set([...pickups, ...traded(i)])}
@@ -229,21 +230,31 @@ export function RosterLab() {
         after={after}
         me={me}
         partners={scenario?.partners ?? []}
-        players={(scenario?.rosters ?? active).map((r) => r.length)}
+        players={(scenario?.rosters ?? rosters).map((r) => r.filter((id) => !onIr.has(id)).length)}
         teamName={(t) => teamLabel(settings, t)}
       />
 
+      <OutList rosters={rosters} teamName={(t) => teamLabel(settings, t)} engine={engine} me={me} cuts={lab.cuts(scenario?.rosters[me] ?? mine)} limit={settings.rounds} />
 
       <p className="text-[12px] leading-snug text-chalk-4">
         {basis === 'season'
           ? 'This season: ESPN’s actual minutes and per-minute production; steals, blocks, threes and shooting lean more on last season while the sample is small.'
           : 'Projections: 9dub’s projections for everyone.'}{' '}
         {lab.finished
-          ? `Each team’s weeks are scaled by how much it has actually played in the ${lab.finished} finished week${lab.finished === 1 ? '' : 's'} (streaming, full lineups), within ±25%. `
+          ? `Each team’s weeks are scaled by how much it has actually played in the ${lab.finished} finished week${lab.finished === 1 ? '' : 's'} compared with its roster then (streaming, full lineups), at ${Math.round((lab.finished / (lab.finished + 2)) * 100)}% strength while the sample is small. `
           : ''}
-        Ranks compare average weekly totals among all {settings.teams} teams; win rates are model estimates that compare options, not exact odds. Differences under about 3 points are noise. Injury returns and role changes aren’t modeled.
+        Players ESPN lists as out sit for two weeks from today (four if they’ve missed most of their team’s games) unless you set a date; a healthy player in an IR slot counts from next week. These are assumptions, since ESPN gives no return dates. Ranks compare average weekly totals among all {settings.teams} teams; ranks and win rates are rough model estimates that compare options, so trust the gain from a move more than the rank itself. Differences under about 3 points are noise. Role changes aren’t modeled.
       </p>
     </div>
+  )
+}
+
+/** ESPN lists him out: the numbers count him from the day after `until`. */
+function OutTag({ until }: { until: string | null }) {
+  return (
+    <span title={until ? `Counted from the day after ${dayLabel(until).day}` : 'Not counted until you set a date'}>
+      <Badge tone="bad">Out</Badge>
+    </span>
   )
 }
 
@@ -256,13 +267,15 @@ function WaiverTag({ stats }: { stats: { waiverClears: string | null } | undefin
 
 const lineText = (l: StatLine | null | undefined) => (l ? `${l.pts.toFixed(1)}p ${l.reb.toFixed(1)}r ${l.ast.toFixed(1)}a ${l.stl.toFixed(1)}s ${l.blk.toFixed(1)}b ${l.tpm.toFixed(1)} 3pm` : '')
 
-/** Search the free agents and waiver players; with no search, the best on the current basis. */
+/** Search the free agents and waiver players; with no search, the best healthy ones on the current basis (a player who's out shows up by name). */
 function FreeAgentPicker({
   engine,
   pool,
   value,
   lineFor,
   stats,
+  isOut,
+  outUntil,
   onPick,
 }: {
   engine: EngineData
@@ -270,6 +283,8 @@ function FreeAgentPicker({
   value: (id: string) => number
   lineFor: (id: string) => StatLine | null
   stats: Record<string, { waiverClears: string | null }> | undefined
+  isOut: (id: string) => boolean
+  outUntil: (id: string) => string | null
   onPick: (id: string) => void
 }) {
   const [q, setQ] = useState('')
@@ -277,10 +292,10 @@ function FreeAgentPicker({
   const results = useMemo(() => {
     const k = normalizeName(q)
     return pool
-      .filter((id) => !k || normalizeName(engine.byId.get(id)?.name ?? '').includes(k))
+      .filter((id) => (k ? normalizeName(engine.byId.get(id)?.name ?? '').includes(k) : !isOut(id)))
       .sort((a, b) => value(b) - value(a))
       .slice(0, 8)
-  }, [pool, q, engine, value])
+  }, [pool, q, engine, value, isOut])
   return (
     <div className="relative">
       <Input
@@ -311,6 +326,7 @@ function FreeAgentPicker({
                   <span className="text-chalk-4">{p?.team ?? 'FA'}</span>
                   <Positions positions={p?.positions ?? []} />
                   <WaiverTag stats={stats?.[id]} />
+                  {isOut(id) ? <OutTag until={outUntil(id)} /> : null}
                   <span className="ml-auto whitespace-nowrap font-mono text-[11.5px] text-chalk-3">{lineText(lineFor(id) ?? p?.line)}</span>
                 </button>
               </li>
@@ -326,6 +342,7 @@ function TradeBuilder({
   engine,
   me,
   rosters,
+  isOut,
   trade,
   setTrade,
   used,
@@ -335,6 +352,7 @@ function TradeBuilder({
   engine: EngineData
   me: number
   rosters: string[][]
+  isOut: (id: string) => boolean
   trade: LabTrade | null
   setTrade: (t: LabTrade | null) => void
   /** Players already in a pickup or another trade. */
@@ -370,6 +388,7 @@ function TradeBuilder({
               )}
             >
               {name(id)}
+              {isOut(id) ? <span className="ml-1 text-[10.5px] font-semibold text-bad">OUT</span> : null}
             </button>
           )
         })}
@@ -485,6 +504,66 @@ function Results({ base, after, teams, me }: { base: LabMetrics; after: LabMetri
         Win: beat {Math.ceil((7 / 11) * opponents)}+ of {opponents} teams in that category in a typical week · Swing: {Math.ceil((4 / 11) * opponents)}–{Math.ceil((7 / 11) * opponents) - 1} · Punt: fewer.
       </p>
     </Panel>
+  )
+}
+
+/** Everyone who sits in these numbers and until when; set a date to try a different return. */
+function OutList({
+  rosters,
+  teamName,
+  engine,
+  me,
+  cuts,
+  limit,
+}: {
+  rosters: readonly (readonly string[])[]
+  teamName: (t: number) => string
+  engine: EngineData
+  me: number
+  /** Your players these numbers drop to stay at the limit → last day on the roster. */
+  cuts: ReadonlyMap<string, string>
+  limit: number
+}) {
+  const list = useEffectiveInjuries()
+  const marks = useApp((s) => s.season.injuries)
+  const setReturnDate = useApp((s) => s.setReturnDate)
+  const today = todayIso()
+  const teamOf = new Map(rosters.flatMap((r, t) => r.map((id) => [id, t] as const)))
+  const rows = list
+    .filter((i) => teamOf.has(i.playerId) && (i.until == null || i.until >= today))
+    .sort((a, b) => Number(teamOf.get(b.playerId) === me) - Number(teamOf.get(a.playerId) === me) || teamOf.get(a.playerId)! - teamOf.get(b.playerId)! || (engine.byId.get(a.playerId)?.name ?? '').localeCompare(engine.byId.get(b.playerId)?.name ?? ''))
+  if (!rows.length) return null
+  return (
+    <details className="group rounded-lg border border-seam bg-floor px-4 py-3" data-testid="lab-out">
+      <summary className="cursor-pointer select-none text-[13px] font-medium text-chalk-2">
+        Who’s out in these numbers ({rows.length})
+        <span className="ml-2 font-normal text-chalk-4">Set a date to try a different return.</span>
+      </summary>
+      {cuts.size ? (
+        <p className="mt-2 text-[12.5px] text-chalk-3" data-testid="lab-cuts">
+          To stay at {limit} players as your team gets healthy, these numbers drop your lowest-value {cuts.size === 1 ? 'player' : 'players'}: {[...cuts].map(([id, last]) => `${engine.byId.get(id)?.name ?? id} (after ${dayLabel(last).day})`).join(', ')}. Every team is treated the same way.
+        </p>
+      ) : null}
+      <ul className="mt-2">
+        {rows.map((i) => {
+          const set = marks.find((m) => m.playerId === i.playerId)?.until
+          const p = engine.byId.get(i.playerId)
+          return (
+            <li key={i.playerId} className="flex min-h-9 flex-wrap items-center gap-x-2.5 border-t border-seam py-1 text-[12.5px]" data-testid="lab-out-row">
+              <span className="min-w-[150px] truncate font-medium text-chalk">{p?.name ?? i.playerId}</span>
+              <span className={cn('min-w-[120px] truncate text-chalk-3', teamOf.get(i.playerId) === me && 'text-clock')}>{teamName(teamOf.get(i.playerId)!)}</span>
+              <span className="ml-auto text-[11.5px] text-chalk-4">{set ? 'Your date' : i.note === ESPN_OUT_NOTE || i.until ? 'Assumed' : 'Until you set a date'}</span>
+              <Input type="date" value={i.until ?? ''} onChange={(e) => setReturnDate(i.playerId, e.target.value || null)} className="h-7 w-[132px] text-[12px]" aria-label={`${p?.name ?? i.playerId} out through`} title="Out through this day" />
+              {set ? (
+                <Button size="xs" variant="ghost" onClick={() => setReturnDate(i.playerId, null)} aria-label={`Reset ${p?.name ?? i.playerId}'s date`}>
+                  Reset
+                </Button>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+    </details>
   )
 }
 

@@ -19,7 +19,19 @@ describe('category spread', () => {
     const far = compareWeek(t({ reb: 160 }), t({ reb: 220 })).calls.find((c) => c.cat === 'REB')!
     expect(close.share!).toBeGreaterThan(far.share!)
     expect(close.share!).toBeLessThan(0.5)
-    expect(far.share!).toBeLessThan(0.01)
+    expect(far.share!).toBeLessThan(0.03)
+  })
+
+  it('runs wider than Poisson where real weeks do (points, rebounds, threes, turnovers), not on the rest', () => {
+    const x = t({ pts: 2 * 110 + 3 * 40 + 60, fgm: 150, tpm: 40, ftm: 60 })
+    const call = (cat: string) => compareWeek(x, x).calls.find((c) => c.cat === cat)!.noise!
+    expect(call('REB')).toBeCloseTo(1.5 * Math.sqrt(2 * x.reb))
+    expect(call('PTS')).toBeCloseTo(1.5 * Math.sqrt(2 * countVariance(x, 'PTS')))
+    expect(call('3PM')).toBeCloseTo(1.25 * Math.sqrt(2 * x.tpm))
+    expect(call('TO')).toBeCloseTo(1.25 * Math.sqrt(2 * x.tov))
+    expect(call('AST')).toBeCloseTo(Math.sqrt(2 * x.ast))
+    expect(call('STL')).toBeCloseTo(Math.sqrt(2 * x.stl))
+    expect(call('BLK')).toBeCloseTo(Math.sqrt(2 * x.blk))
   })
 })
 
@@ -33,7 +45,7 @@ describe('chasing a category', () => {
   })
 
   it('chases when one pickup clearly helps, lets go when none does, and ignores categories already won', () => {
-    const w = compareWeek(t({ reb: 150, blk: 40 }), t({ reb: 162 }))
+    const w = compareWeek(t({ reb: 150, blk: 40 }), t({ reb: 175 }))
     const reb = w.calls.find((c) => c.cat === 'REB')!
     expect(chaseVerdict(reb, reb.share! + 0.3)).toBe('chase')
     expect(chaseVerdict(reb, reb.share! + 0.05)).toBe('let-go')

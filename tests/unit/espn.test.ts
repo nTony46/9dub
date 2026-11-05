@@ -75,6 +75,11 @@ describe('ESPN snapshot', () => {
     expect(snap.live?.period).toBe(1)
     expect(snap.live?.fromDate).toBe(localDate(Date.parse(FETCHED)))
     expect(snap.live?.started.sort()).toEqual(['DEN', 'MEM'])
+    // Tipped two hours ago: about a fifth of a 150-minute game left. Three hours ago: over.
+    expect(snap.live?.underway).toEqual({ DEN: expect.closeTo(0.2), MEM: expect.closeTo(0.2) })
+    const over = snapshotFromEspn(rawLeague, { ...rawPro, games: [{ start: Date.parse(FETCHED) - 3 * 3600_000, home: 7, away: 29 }] }, FETCHED)
+    expect(over.live?.started.sort()).toEqual(['DEN', 'MEM'])
+    expect(over.live?.underway).toEqual({})
     expect(snap.live?.teams.find((t) => t.slot === 1)?.totals).toMatchObject({ pts: 50, fgm: 20, fga: 40, tpm: 3, tov: 4, reb: 0 })
   })
 

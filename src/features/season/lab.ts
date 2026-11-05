@@ -2,9 +2,10 @@ import { CATEGORIES, type Category } from '@/analytics/categories'
 import { addTotals, compareWeek, projectSide, weekTotals, type MatchupPlayer, type WeekTotals } from '@/analytics/matchup'
 import type { SlotDef } from '@/analytics/positions'
 import type { StatLine } from '@/analytics/types'
-import { datesBetween } from '@/data/schedule'
+import { addDays, datesBetween } from '@/data/schedule'
 import type { EngineData } from '@/store/derived'
-import type { EspnSync, MatchupWeek } from '@/store/schema'
+import { rostersOn } from '@/store/season'
+import type { EspnSync, Injury, MatchupWeek, RosterMove } from '@/store/schema'
 import { matchupPlayers, type ProjectionOptions } from './model'
 
 /**
@@ -168,6 +169,32 @@ export function labPlayers(ids: readonly string[], engine: EngineData, opts: Pro
   return matchupPlayers(ids, engine, opts).map((p) => ({ ...p, line: lineFor(p.id) ?? p.line, priority: -value(p.id) }))
 }
 
+/**
+ * A team kept at the roster limit as its hurt players come back: out players
+ * fill the IR slots first (no roster spot), and whenever the rest would run
+ * over `limit`, the lowest-value healthy player goes that day. `before` is the
+ * day before the first one projected, for a team already over.
+ */
+export function withRosterLimit(players: readonly MatchupPlayer[], limit: number, irSlots: number, before: string): { players: MatchupPlayer[]; cuts: Map<string, string> } {
+  const returning = players.filter((p) => p.outThrough != null).sort((a, b) => a.outThrough!.localeCompare(b.outThrough!))
+  const never = players.filter((p) => p.outThrough === null).length
+  const lowestFirst = players.filter((p) => p.outThrough === undefined).sort((a, b) => b.priority - a.priority)
+  const cuts = new Map<string, string>()
+  const trim = (back: number, through: string) => {
+    const stillOut = returning.length - back + never
+    let onRoster = lowestFirst.length - cuts.size + back + Math.max(0, stillOut - irSlots)
+    for (const p of lowestFirst) {
+      if (onRoster <= limit) break
+      if (cuts.has(p.id)) continue
+      cuts.set(p.id, through)
+      onRoster--
+    }
+  }
+  trim(0, before)
+  returning.forEach((p, k) => trim(k + 1, p.outThrough!))
+  return { players: players.map((p) => (cuts.has(p.id) ? { ...p, until: cuts.get(p.id) } : p)), cuts }
+}
+
 /** One team's projected week totals, week by week (scaled by `volume`, see `volumeFactor`). */
 export function teamWeeks(players: readonly MatchupPlayer[], weeks: readonly string[][], playing: (d: string) => ReadonlySet<string> | undefined, slots: readonly SlotDef[], volume = 1): WeekTotals[] {
   return weeks.map((dates) => scaleWeek(projectSide(players, dates, playing, slots).totals, volume))
@@ -179,44 +206,57 @@ export function scaleWeek(t: WeekTotals, f: number): WeekTotals {
   return { ...t, pts: t.pts * f, tpm: t.tpm * f, reb: t.reb * f, ast: t.ast * f, stl: t.stl * f, blk: t.blk * f, tov: t.tov * f, fgm: t.fgm * f, fga: t.fga * f, ftm: t.ftm * f, fta: t.fta * f }
 }
 
-/** The range a team's volume factor is kept in: two or three weeks of results are a small sample. */
+/** The range a team's measured ratio is kept in: a few weeks of results are a small sample. */
 const VOLUME_RANGE = [0.8, 1.25] as const
+/** Finished weeks that count for as much as "plays what his roster projects": two finished weeks give the ratio half its weight, sixteen about 90%. */
+const VOLUME_PRIOR_WEEKS = 2
 
 /**
  * How much a team has actually played compared with what its roster projects:
  * field-goal attempts in the finished weeks (ESPN's results) ÷ the projection
- * of the same days with today's roster. Above 1 = it streams pickups or fills
- * its lineup more than its roster alone suggests. 1 when there's nothing to go on.
+ * of the same days with the rosters of those weeks, pulled toward 1 while
+ * there are few of them. Above 1 = it streams pickups or fills its lineup more
+ * than its roster alone suggests. 1 when there's nothing to go on.
  */
-export function volumeFactor(actualFga: number, projectedFga: number): number {
-  if (!(actualFga > 0) || !(projectedFga > 0)) return 1
-  return Math.min(VOLUME_RANGE[1], Math.max(VOLUME_RANGE[0], actualFga / projectedFga))
+export function volumeFactor(actualFga: number, projectedFga: number, finishedWeeks: number): number {
+  if (!(actualFga > 0) || !(projectedFga > 0) || !(finishedWeeks > 0)) return 1
+  const ratio = Math.min(VOLUME_RANGE[1], Math.max(VOLUME_RANGE[0], actualFga / projectedFga))
+  return 1 + (ratio - 1) * (finishedWeeks / (finishedWeeks + VOLUME_PRIOR_WEEKS))
 }
 
-/** Each team's volume factor from its finished weeks (see `volumeFactor`); a scenario keeps the unchanged league's factors. */
+export interface FinishedWeek {
+  dates: string[]
+  fga: ReadonlyMap<number, number>
+}
+
+/** Each team's volume factor from its finished weeks (see `volumeFactor`), each measured with the players that team had that week; a scenario keeps the unchanged league's factors. */
 export function volumeFactors(
-  players: readonly (readonly MatchupPlayer[])[],
-  finished: readonly { dates: string[]; fga: ReadonlyMap<number, number> }[],
+  teams: number,
+  playersIn: (week: FinishedWeek) => readonly (readonly MatchupPlayer[])[],
+  finished: readonly FinishedWeek[],
   playing: (d: string) => ReadonlySet<string> | undefined,
   slots: readonly SlotDef[],
 ): number[] {
-  return players.map((ps, t) => {
+  const players = finished.map(playersIn)
+  return Array.from({ length: teams }, (_, t) => {
     let actual = 0
     let projected = 0
-    for (const w of finished) {
+    let weeks = 0
+    finished.forEach((w, k) => {
       const a = w.fga.get(t)
-      if (a == null) continue
+      if (a == null) return
       actual += a
-      projected += projectSide(ps, w.dates, playing, slots).totals.fga
-    }
-    return volumeFactor(actual, projected)
+      projected += projectSide(players[k][t], w.dates, playing, slots).totals.fga
+      weeks++
+    })
+    return volumeFactor(actual, projected, weeks)
   })
 }
 
 /** Finished regular-season weeks (1-based period, its dates) with every team's actual field-goal attempts from ESPN. */
-export function finishedWeeks(weeks: readonly Pick<MatchupWeek, 'start' | 'end'>[], results: EspnSync['results'] | undefined, today: string): { dates: string[]; fga: Map<number, number> }[] {
+export function finishedWeeks(weeks: readonly Pick<MatchupWeek, 'start' | 'end'>[], results: EspnSync['results'] | undefined, today: string): FinishedWeek[] {
   const sorted = [...weeks].sort((a, b) => a.start.localeCompare(b.start))
-  const out: { dates: string[]; fga: Map<number, number> }[] = []
+  const out: FinishedWeek[] = []
   sorted.forEach((w, k) => {
     if (w.end >= today) return
     const fga = new Map<number, number>()
@@ -426,4 +466,68 @@ export function applyLab(rosters: readonly (readonly string[])[], me: number, ch
     out[trade.team] = out[trade.team].filter((id) => !trade.get.includes(id)).concat(trade.give.filter((id) => !out[trade.team].includes(id)))
   }
   return out
+}
+
+export interface LabInputs {
+  engine: EngineData
+  /** Everyone on each team now, IR included: who sits, and for how long, is `injuries`. */
+  rosters: readonly (readonly string[])[]
+  /** Free agents and waiver players on offer. */
+  available: readonly string[]
+  /** Who sits now → out through (null = until further notice), see `effectiveInjuries`. */
+  injuries: ReadonlyMap<string, string | null>
+  /** The record behind the rosters, to rebuild each finished week's. */
+  history: { draftRosters: readonly (readonly string[])[]; moves: readonly RosterMove[]; marks: readonly Injury[]; irSlots: number }
+  weeks: readonly Pick<MatchupWeek, 'start' | 'end'>[]
+  stats: EspnSync['stats'] | undefined
+  results: EspnSync['results'] | undefined
+  basis: LabBasis
+  /** False leaves every team at factor 1 (this season's stats aren't in yet, so "what its roster projects" can't be measured). */
+  scaleVolume: boolean
+  /** Players a team can hold outside its IR slots. */
+  rosterLimit: number
+  me: number
+  today: string
+  playing: (d: string) => ReadonlySet<string> | undefined
+  slots: readonly SlotDef[]
+}
+
+/**
+ * The Roster Lab's league: every team's rest-of-season weeks and where you
+ * stand. Lineups go by value, not today's ESPN slots: these are weeks ahead, and
+ * a slot held today (the bench while he's hurt, IR, or another team's) says
+ * nothing about who starts then.
+ */
+export function buildLab(i: LabInputs) {
+  const { engine, playing, slots, today } = i
+  const opts: ProjectionOptions = { availability: false, injuries: i.injuries, slots, lineups: null }
+  const lineFor = labLineFor(i.stats, i.basis)
+  const seasonLines = labLineFor(i.stats, 'season')
+  const pool = new Set([...i.rosters.flat(), ...i.available])
+  const lineOf = (f: (id: string) => StatLine | null) => new Map([...pool].map((id) => [id, f(id) ?? engine.byId.get(id)?.line ?? null] as const).filter((x): x is [string, StatLine] => x[1] != null))
+  const values = lineValues(lineOf(lineFor))
+  const seasonValues = lineValues(lineOf(seasonLines))
+  const value = (id: string) => values.get(id) ?? -99
+  const all = labWeeks(i.weeks, today)
+  // How much each team actually plays (streaming, full lineups), measured with this season's lines so either basis gets the same factor.
+  const fin = finishedWeeks(i.weeks, i.results, today)
+  const { draftRosters, moves, marks, irSlots } = i.history
+  const volume = i.scaleVolume
+    ? volumeFactors(
+        i.rosters.length,
+        (w) => {
+          const then = rostersOn(draftRosters, moves, marks, irSlots, w.dates[w.dates.length - 1])
+          return then.active.map((r) => labPlayers(r, engine, { availability: false, injuries: then.out, slots, lineups: null }, seasonLines, (id) => seasonValues.get(id) ?? -99))
+        },
+        fin,
+        playing,
+        slots,
+      )
+    : i.rosters.map(() => 1)
+  const before = addDays(all[0]?.[0] ?? today, -1)
+  const limited = (ids: readonly string[]) => withRosterLimit(labPlayers(ids, engine, opts, lineFor, value), i.rosterLimit, irSlots, before)
+  const project = (ids: readonly string[], t: number) => teamWeeks(limited(ids).players, all, playing, slots, volume[t])
+  const base = i.rosters.map((r, t) => project(r, t))
+  const metrics = leagueMetrics(base, i.me)
+  return { lineFor, value, base, metrics, top4: strongest(metrics.strength, i.me, 4), project, cuts: (ids: readonly string[]) => limited(ids).cuts, weeks: all.length, finished: fin.length, volume }
 }
