@@ -32,7 +32,14 @@ import { dayLabel, useCurrentRosters, useEffectiveInjuries, useInjuries, useSche
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`
 const TIER = { win: { label: 'Win', text: 'text-good' }, swing: { label: 'Swing', text: 'text-warn' }, punt: { label: 'Punt', text: 'text-bad' } } as const
-const weeklyText = (c: Category, v: number) => (c === 'FG' || c === 'FT' ? v.toFixed(3).replace(/^0/, '') : `${c === 'PTS' ? v.toFixed(0) : v.toFixed(1)}/wk`)
+/** A weekly total as a plain number: FG% and FT% as .483, points whole, everything else to one decimal. */
+const weeklyNumber = (c: Category, v: number) => (c === 'FG' || c === 'FT' ? v.toFixed(3).replace(/^0/, '') : c === 'PTS' ? v.toFixed(0) : v.toFixed(1))
+const weeklyText = (c: Category, v: number) => (c === 'FG' || c === 'FT' ? weeklyNumber(c, v) : `${weeklyNumber(c, v)}/wk`)
+/** How far a weekly total moved ("+12.4", "−.006"); null when the move rounds away to nothing. */
+const weeklyChange = (c: Category, now: number, was: number) => {
+  const size = weeklyNumber(c, Math.abs(now - was))
+  return /[1-9]/.test(size) ? `${now > was ? '+' : '−'}${size}` : null
+}
 
 /** Heat fills: every team's z-score in each category's weekly totals (sign: better = positive) and in categories won per matchup. */
 function heatOf(m: LabMetrics): { cats: Record<Category, number>; strength: number }[] {
@@ -586,6 +593,9 @@ function LeagueTable({
   teamName: (t: number) => string
 }) {
   const m = after ?? base
+  const view = useApp((s) => s.prefs.labLeagueView)
+  const setPrefs = useApp((s) => s.setPrefs)
+  const numbers = view === 'numbers'
   const [sort, setSort] = useState<SortKey>('overall')
   const z = useMemo(() => heatOf(m), [m])
   const n = m.teams.length
@@ -609,7 +619,24 @@ function LeagueTable({
   return (
     <Panel
       title="League"
-      subtitle={after ? 'Every team re-ranked with your changes; ▲▼ are moves from now. Other teams move too as you pass them.' : 'Every team’s rank in each category over the rest of the regular season (1 = best). Click a column to sort.'}
+      subtitle={
+        numbers
+          ? `Each team’s average week over the rest of the regular season: the numbers the ranks come from.${after ? ' The small number is the change from now.' : ''} FG% and FT% are from total makes and attempts; fewer turnovers is better. Click a column to sort.`
+          : after
+            ? 'Every team re-ranked with your changes; ▲▼ are moves from now. Other teams move too as you pass them.'
+            : 'Every team’s rank in each category over the rest of the regular season (1 = best). Click a column to sort.'
+      }
+      actions={
+        <Segmented<'ranks' | 'numbers'>
+          label="League table shows"
+          value={view}
+          onChange={(v) => setPrefs({ labLeagueView: v })}
+          options={[
+            { value: 'ranks', label: 'Ranks', title: 'Each team’s rank in every category' },
+            { value: 'numbers', label: 'Numbers', title: 'Each team’s average weekly totals, the numbers behind the ranks' },
+          ]}
+        />
+      }
     >
       <div className="overflow-x-auto rounded-md border border-seam" data-testid="lab-league">
         <table className="w-full border-separate border-spacing-0 text-[12.5px]">
@@ -619,7 +646,7 @@ function LeagueTable({
                 <span className="label-caps">Team</span>
               </th>
               <th className="h-9 w-12 border-b border-seam-strong px-1 text-center font-display text-[12px] font-semibold text-chalk-3">Players</th>
-              {CATEGORIES.map((c) => header(c, CATEGORY_META[c].label, `Sort by ${CATEGORY_META[c].name} rank`))}
+              {CATEGORIES.map((c) => header(c, CATEGORY_META[c].label, `Sort by ${CATEGORY_META[c].name}${numbers ? ', best first' : ' rank'}`))}
               <th className="h-9 border-b border-seam-strong px-2 text-right font-display text-[12px] font-semibold text-chalk-3" title="Expected categories won per matchup against the league (all-play)">
                 Cats / matchup
               </th>
@@ -641,6 +668,9 @@ function LeagueTable({
                   <td className="border-b border-seam text-center font-mono text-[12px] tabular-nums text-chalk-2">{players[t]}</td>
                   {CATEGORIES.map((c) => {
                     const r = m.teams[t].ranks[c]
+                    const value = m.teams[t].weekly[c]
+                    const current = base.teams[t].weekly[c]
+                    const change = after ? weeklyChange(c, value, current) : null
                     return (
                       <td key={c} className="border-b border-seam p-[2px]">
                         <Tip
@@ -653,17 +683,28 @@ function LeagueTable({
                                 {weeklyText(c, m.teams[t].weekly[c])} · rank {r} of {n}
                                 {after && base.teams[t].ranks[c] !== r ? ` (currently ${base.teams[t].ranks[c]})` : ''}
                               </div>
+                              {change ? <div>Now {weeklyText(c, current)}</div> : null}
                               {c === 'TO' ? <div className="text-chalk-3">Fewer turnovers = better.</div> : null}
                             </div>
                           }
                         >
-                          <div
-                            className="on-heat flex h-9 min-w-[46px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-semibold tabular-nums text-chalk"
-                            style={{ background: leagueHeat(z[t].cats[c]) }}
-                          >
-                            {r}
-                            {move(base.teams[t].ranks[c], r)}
-                          </div>
+                          {numbers ? (
+                            <div
+                              className="on-heat flex h-9 min-w-[46px] flex-col items-center justify-center gap-0.5 rounded-[4px] font-mono text-[12.5px] font-semibold leading-none tabular-nums text-chalk"
+                              style={{ background: leagueHeat(z[t].cats[c]) }}
+                            >
+                              <span>{weeklyNumber(c, value)}</span>
+                              {change ? <span className="text-[10.5px]">{change}</span> : null}
+                            </div>
+                          ) : (
+                            <div
+                              className="on-heat flex h-9 min-w-[46px] items-center justify-center rounded-[4px] font-mono text-[12.5px] font-semibold tabular-nums text-chalk"
+                              style={{ background: leagueHeat(z[t].cats[c]) }}
+                            >
+                              {r}
+                              {move(base.teams[t].ranks[c], r)}
+                            </div>
+                          )}
                         </Tip>
                       </td>
                     )

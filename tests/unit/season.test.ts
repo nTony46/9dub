@@ -152,15 +152,17 @@ describe('in-season store actions', () => {
     expect(useApp.getState().season.streamers).toEqual([])
   })
 
-  it('states saved before streamer tags load with none, and the league-ranks toggle off', () => {
+  it('states saved before streamer tags load with none, the league-ranks toggle off, and the Lab league table on ranks', () => {
     const old = JSON.parse(JSON.stringify(defaultPersisted())) as { season: Record<string, unknown>; prefs: Record<string, unknown> }
     delete old.season.streamers
     delete old.prefs.leagueRanks
+    delete old.prefs.labLeagueView
     const m = migrateState(old)
     expect(m.ok).toBe(true)
     if (m.ok) {
       expect(m.state.season.streamers).toEqual([])
       expect(m.state.prefs.leagueRanks).toBe(false)
+      expect(m.state.prefs.labLeagueView).toBe('ranks')
     }
   })
 

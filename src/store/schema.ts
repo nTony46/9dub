@@ -94,6 +94,8 @@ export const PrefsSchema = z.object({
   waiverWire: z.boolean().default(true),
   /** The matchup's category table shows each team's league rank, season to date. */
   leagueRanks: z.boolean().default(false),
+  /** The Roster Lab's League table shows ranks or the weekly numbers behind them. */
+  labLeagueView: z.enum(['ranks', 'numbers']).default('ranks'),
 })
 export type Prefs = z.infer<typeof PrefsSchema>
 
